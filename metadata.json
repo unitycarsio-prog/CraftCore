@@ -1,0 +1,5 @@
+{
+  "name": "CraftCore",
+  "description": "An AI-powered application that allows users to generate and iterate on websites using natural language prompts. Built by Nexzi.",
+  "requestFramePermissions": []
+}
