@@ -3,7 +3,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { GoogleGenAI, Type } from "@google/genai";
 import * as htmlToImage from 'html-to-image';
 import { GeneratedCode, Page, ChatMessage, GitHubAuthState, Project } from '../types';
-import { ArrowLeftIcon, DesktopIcon, TabletIcon, MobileIcon, DownloadIcon, CodeIcon, ClipboardIcon, ClipboardCheckIcon, GitHubIcon, RestoreIcon, XIcon, SendIcon, UserIcon, BotIcon, ZapIcon, FileArchiveIcon, ExpandIcon, CompressIcon, SaveIcon } from './Icons';
+import { ArrowLeftIcon, DesktopIcon, TabletIcon, MobileIcon, DownloadIcon, CodeIcon, ClipboardIcon, ClipboardCheckIcon, GitHubIcon, RestoreIcon, XIcon, SendIcon, UserIcon, BotIcon, ZapIcon, FileArchiveIcon, ExpandIcon, CompressIcon, SaveIcon, MenuIcon } from './Icons';
 import Loader from './Loader';
 
 interface BuildProps {
@@ -73,6 +73,7 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
   const [githubAuth, setGithubAuth] = useState<GitHubAuthState>({ status: 'idle' });
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -119,10 +120,13 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
       if (e.key === 'Escape' && isFullscreen) {
         setIsFullscreen(false);
       }
+      if (e.key === 'Escape' && isSidebarOpen) {
+        setIsSidebarOpen(false);
+      }
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isFullscreen]);
+  }, [isFullscreen, isSidebarOpen]);
 
   useEffect(() => {
     const iframe = iframeRef.current;
@@ -183,6 +187,7 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
 
     setIsLoading(true);
     setError(null);
+    if(isSidebarOpen) setIsSidebarOpen(false);
     
     const userMessage: ChatMessage = { id: `user-${Date.now()}`, role: 'user', text: userPrompt, timestamp: new Date() };
     const botMessage: ChatMessage = { id: `bot-${Date.now()}`, role: 'bot', text: 'Thinking...', isLoading: true, timestamp: new Date() };
@@ -277,7 +282,7 @@ When modifying, ensure you return the COMPLETE, updated code for all three files
     } finally {
       setIsLoading(false);
     }
-  }, [newMessage, isLoading, generatedCode]);
+  }, [newMessage, isLoading, generatedCode, isSidebarOpen]);
 
   const triggerDownload = (filename: string, content: string, mimeType: string) => {
     const blob = new Blob([content], { type: mimeType });
@@ -340,119 +345,143 @@ When modifying, ensure you return the COMPLETE, updated code for all three files
   const previewWidths: Record<PreviewMode, string> = { desktop: 'w-full', tablet: 'w-[768px]', mobile: 'w-[375px]' };
 
   return (
-    <div className="flex h-screen w-screen bg-slate-900 text-white font-sans overflow-hidden">
-      {/* Left Sidebar */}
-      <aside className="w-[380px] flex-shrink-0 bg-slate-950 flex flex-col h-full border-r border-slate-800">
-        {/* Sidebar Header */}
-        <header className="flex-shrink-0 p-4 border-b border-slate-800">
-          <div className="flex items-center justify-between">
-            <button onClick={() => onNavigate(Page.HOME)} className="flex items-center gap-2 p-2 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors" aria-label="Back to Home">
-              <ArrowLeftIcon className="h-5 w-5" />
-              <span className="text-sm font-medium">Exit</span>
-            </button>
-            <div className="flex items-center gap-2">
-              <button onClick={handleSaveProject} title="Save Project" disabled={!generatedCode || saveState !== 'idle'} className="p-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed relative w-9 h-9 flex items-center justify-center transition-colors">
-                  {saveState === 'saving' && <Loader />}
-                  {saveState === 'saved' && <ClipboardCheckIcon className="h-5 w-5 text-green-400" />}
-                  {saveState === 'idle' && <SaveIcon className="h-5 w-5" />}
+    <>
+      {isSidebarOpen && (
+        <div 
+            onClick={() => setIsSidebarOpen(false)}
+            className="lg:hidden fixed inset-0 bg-black/60 z-20"
+            aria-hidden="true"
+        ></div>
+      )}
+      <div className="flex h-screen w-screen bg-slate-900 text-white font-sans overflow-hidden">
+        {/* Left Sidebar */}
+        <aside className={`absolute lg:relative z-30 w-[90%] sm:w-[380px] flex-shrink-0 bg-slate-950 flex flex-col h-full border-r border-slate-800 transition-transform duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0`}>
+          {/* Sidebar Header */}
+          <header className="flex-shrink-0 p-4 border-b border-slate-800">
+            <div className="flex items-center justify-between">
+              <button onClick={() => onNavigate(Page.HOME)} className="flex items-center gap-2 p-2 -ml-2 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors" aria-label="Back to Home">
+                <ArrowLeftIcon className="h-5 w-5" />
+                <span className="text-sm font-medium">Exit</span>
               </button>
-              <button onClick={() => setIsCodePanelVisible(!isCodePanelVisible)} title={isCodePanelVisible ? 'Hide Code' : 'View Code'} disabled={!generatedCode} className={`p-2 rounded-lg transition-colors ${isCodePanelVisible ? 'bg-sky-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50'}`}>
-                <CodeIcon className="h-5 w-5" />
-              </button>
-              <button onClick={() => setIsGithubModalOpen(true)} title="Push to GitHub" disabled={!generatedCode} className={`p-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50`}>
-                  <GitHubIcon className={`h-5 w-5 ${githubAuth.status === 'authenticated' ? 'text-green-400' : ''}`} />
-              </button>
-              <button onClick={handleDownload} title="Download Project Files" disabled={!generatedCode} className="p-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50">
-                <FileArchiveIcon className="h-5 w-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={handleSaveProject} title="Save Project" disabled={!generatedCode || saveState !== 'idle'} className="p-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed relative w-9 h-9 flex items-center justify-center transition-colors">
+                    {saveState === 'saving' && <Loader />}
+                    {saveState === 'saved' && <ClipboardCheckIcon className="h-5 w-5 text-green-400" />}
+                    {saveState === 'idle' && <SaveIcon className="h-5 w-5" />}
+                </button>
+                <button onClick={() => setIsCodePanelVisible(!isCodePanelVisible)} title={isCodePanelVisible ? 'Hide Code' : 'View Code'} disabled={!generatedCode} className={`p-2 rounded-lg transition-colors ${isCodePanelVisible ? 'bg-sky-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50'}`}>
+                  <CodeIcon className="h-5 w-5" />
+                </button>
+                <button onClick={() => setIsGithubModalOpen(true)} title="Push to GitHub" disabled={!generatedCode} className={`p-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50`}>
+                    <GitHubIcon className={`h-5 w-5 ${githubAuth.status === 'authenticated' ? 'text-green-400' : ''}`} />
+                </button>
+                <button onClick={handleDownload} title="Download Project Files" disabled={!generatedCode} className="p-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50">
+                  <FileArchiveIcon className="h-5 w-5" />
+                </button>
+                <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden p-2 -mr-2 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white" aria-label="Close controls">
+                    <XIcon className="h-5 w-5" />
+                </button>
+              </div>
             </div>
-          </div>
-        </header>
-
-        {/* Chat History */}
-        <div className="flex-grow overflow-y-auto p-6 pr-4">
-          <div className="space-y-6">
-            {messages.map((msg) => <Message key={msg.id} message={msg} onRestore={handleRestoreHistory}/>)}
-            <div ref={chatEndRef} />
-          </div>
-        </div>
-
-        {/* Prompt Input */}
-        <div className="flex-shrink-0 p-4 border-t border-slate-800">
-          <form onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }} className="relative">
-            <textarea
-              value={newMessage}
-              onChange={(e) => setNewMessage(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } }}
-              placeholder="e.g., A sleek portfolio for a UX designer..."
-              className="w-full p-3 pr-12 bg-slate-800 border border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500 transition-colors text-slate-200 text-sm placeholder:text-slate-500 resize-none"
-              rows={3}
-              disabled={isLoading}
-            />
-            <button type="submit" disabled={isLoading || !newMessage.trim()} className="absolute right-3 bottom-3 p-2 rounded-full bg-sky-600 text-white hover:bg-sky-500 disabled:bg-slate-600 disabled:cursor-not-allowed transition-all duration-300">
-              {isLoading ? <Loader /> : <SendIcon className="h-5 w-5" />}
-            </button>
-          </form>
-        </div>
-      </aside>
-
-      {/* Main Content Area */}
-      <div className={`flex-1 flex flex-col overflow-hidden transition-all duration-300 ease-in-out ${isFullscreen ? 'fixed inset-0 z-40' : 'relative'}`}>
-        {/* Device Toggles Header */}
-        <header className="flex-shrink-0 h-14 flex items-center justify-center gap-2 bg-slate-900 border-b border-slate-800 z-10">
-          <button onClick={() => setPreviewMode('desktop')} className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-colors ${previewMode === 'desktop' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Desktop Preview"><DesktopIcon className="h-5 w-5" /> Desktop</button>
-          <button onClick={() => setPreviewMode('tablet')} className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-colors ${previewMode === 'tablet' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Tablet Preview"><TabletIcon className="h-5 w-5" /> Tablet</button>
-          <button onClick={() => setPreviewMode('mobile')} className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-colors ${previewMode === 'mobile' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Mobile Preview"><MobileIcon className="h-5 w-5" /> Mobile</button>
-          <div className="h-6 w-px bg-slate-700 mx-2"></div>
-          <button 
-            onClick={toggleFullscreen} 
-            className="px-3 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-colors text-slate-400 hover:bg-slate-800 hover:text-white"
-            title={isFullscreen ? 'Exit Fullscreen Preview' : 'Fullscreen Preview'}
-          >
-            {isFullscreen ? <CompressIcon className="h-5 w-5" /> : <ExpandIcon className="h-5 w-5" />}
-          </button>
-        </header>
-        
-        {/* Preview */}
-        <main className="flex-grow overflow-auto p-8 flex items-center justify-center bg-slate-900">
-           {isLoading && (
-            <div className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm flex flex-col items-center justify-center z-20 transition-opacity duration-300">
-              <Loader />
-              <p className="mt-4 text-slate-300 font-medium">CraftCore is building your vision...</p>
-              <p className="mt-2 text-sm text-slate-400">This may take a few moments.</p>
-            </div>
-          )}
-          <div className={`relative h-full shadow-2xl bg-slate-800 rounded-xl border border-slate-700/50 overflow-hidden transition-all duration-500 ease-in-out ${previewWidths[previewMode]} ${isLoading ? 'animate-pulse' : ''}`}>
-            <iframe ref={iframeRef} title="Website Preview" className="w-full h-full bg-white"/>
-          </div>
-        </main>
-        
-        {/* Code Panel (Overlay) */}
-        <aside className={`transition-transform duration-300 ease-in-out bg-slate-900/80 backdrop-blur-xl border-l border-slate-700 flex flex-col absolute top-0 right-0 h-full z-30 ${isCodePanelVisible ? 'translate-x-0 w-[40%]' : 'translate-x-full w-[40%]'}`}>
-          <header className="flex items-center justify-between p-4 border-b border-slate-700 flex-shrink-0">
-            <div className="flex items-center gap-2">
-              <button onClick={() => setActiveCodeTab('html')} className={`px-3 py-1 text-sm rounded-md ${activeCodeTab === 'html' ? 'bg-sky-600' : 'bg-slate-700 hover:bg-slate-600'}`}>HTML</button>
-              <button onClick={() => setActiveCodeTab('css')} className={`px-3 py-1 text-sm rounded-md ${activeCodeTab === 'css' ? 'bg-sky-600' : 'bg-slate-700 hover:bg-slate-600'}`} disabled={!generatedCode?.css}>CSS</button>
-              <button onClick={() => setActiveCodeTab('js')} className={`px-3 py-1 text-sm rounded-md ${activeCodeTab === 'js' ? 'bg-sky-600' : 'bg-slate-700 hover:bg-slate-600'}`} disabled={!generatedCode?.js}>JS</button>
-            </div>
-            <button onClick={handleCopyCode} className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-md bg-slate-700 hover:bg-slate-600 transition-colors disabled:opacity-50">
-              {copied ? <ClipboardCheckIcon className="h-4 w-4 text-green-400"/> : <ClipboardIcon className="h-4 w-4"/>}
-              {copied ? 'Copied!' : 'Copy'}
-            </button>
           </header>
-          <div className="flex-1 overflow-auto bg-transparent min-h-0">
-            <pre className="text-sm h-full w-full p-4"><code className={`language-${activeCodeTab} whitespace-pre-wrap`}>{getActiveCode()}</code></pre>
+
+          {/* Chat History */}
+          <div className="flex-grow overflow-y-auto p-6 pr-4">
+            <div className="space-y-6">
+              {messages.map((msg) => <Message key={msg.id} message={msg} onRestore={handleRestoreHistory}/>)}
+              <div ref={chatEndRef} />
+            </div>
+          </div>
+
+          {/* Prompt Input */}
+          <div className="flex-shrink-0 p-4 border-t border-slate-800">
+            <form onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }} className="relative">
+              <textarea
+                value={newMessage}
+                onChange={(e) => setNewMessage(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } }}
+                placeholder="e.g., A sleek portfolio for a UX designer..."
+                className="w-full p-3 pr-12 bg-slate-800 border border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500 transition-colors text-slate-200 text-sm placeholder:text-slate-500 resize-none"
+                rows={3}
+                disabled={isLoading}
+              />
+              <button type="submit" disabled={isLoading || !newMessage.trim()} className="absolute right-3 bottom-3 p-2 rounded-full bg-sky-600 text-white hover:bg-sky-500 disabled:bg-slate-600 disabled:cursor-not-allowed transition-all duration-300">
+                {isLoading ? <Loader /> : <SendIcon className="h-5 w-5" />}
+              </button>
+            </form>
           </div>
         </aside>
-      </div>
 
-      {isGithubModalOpen && <GitHubModal 
-        onClose={() => setIsGithubModalOpen(false)} 
-        code={generatedCode} 
-        auth={githubAuth}
-        setAuth={setGithubAuth}
-      />}
-    </div>
+        {/* Main Content Area */}
+        <div className={`flex-1 flex flex-col overflow-hidden transition-all duration-300 ease-in-out ${isFullscreen ? 'fixed inset-0 z-40' : 'relative'}`}>
+          {/* Device Toggles Header */}
+          <header className="flex-shrink-0 h-14 flex items-center justify-center gap-2 bg-slate-900 border-b border-slate-800 z-10 relative">
+            <button 
+                onClick={() => setIsSidebarOpen(true)}
+                className="lg:hidden absolute left-4 top-1/2 -translate-y-1/2 p-2 rounded-md text-slate-400 hover:bg-slate-800"
+                aria-label="Open controls"
+            >
+                <MenuIcon className="h-5 w-5" />
+            </button>
+            <button onClick={() => setPreviewMode('desktop')} className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-colors ${previewMode === 'desktop' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Desktop Preview"><DesktopIcon className="h-5 w-5" /> <span className="hidden sm:inline">Desktop</span></button>
+            <button onClick={() => setPreviewMode('tablet')} className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-colors ${previewMode === 'tablet' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Tablet Preview"><TabletIcon className="h-5 w-5" /> <span className="hidden sm:inline">Tablet</span></button>
+            <button onClick={() => setPreviewMode('mobile')} className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-colors ${previewMode === 'mobile' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Mobile Preview"><MobileIcon className="h-5 w-5" /> <span className="hidden sm:inline">Mobile</span></button>
+            <div className="h-6 w-px bg-slate-700 mx-2"></div>
+            <button 
+              onClick={toggleFullscreen} 
+              className="px-3 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-colors text-slate-400 hover:bg-slate-800 hover:text-white"
+              title={isFullscreen ? 'Exit Fullscreen Preview' : 'Fullscreen Preview'}
+            >
+              {isFullscreen ? <CompressIcon className="h-5 w-5" /> : <ExpandIcon className="h-5 w-5" />}
+            </button>
+          </header>
+          
+          {/* Preview */}
+          <main className="flex-grow overflow-auto p-4 sm:p-8 flex items-center justify-center bg-slate-900">
+            {isLoading && (
+              <div className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm flex flex-col items-center justify-center z-20 transition-opacity duration-300">
+                <Loader />
+                <p className="mt-4 text-slate-300 font-medium">CraftCore is building your vision...</p>
+                <p className="mt-2 text-sm text-slate-400">This may take a few moments.</p>
+              </div>
+            )}
+            <div className={`relative h-full shadow-2xl bg-slate-800 rounded-xl border border-slate-700/50 overflow-hidden transition-all duration-500 ease-in-out ${previewWidths[previewMode]} ${isLoading ? 'animate-pulse' : ''}`}>
+              <iframe ref={iframeRef} title="Website Preview" className="w-full h-full bg-white"/>
+            </div>
+          </main>
+          
+          {/* Code Panel (Overlay) */}
+          <aside className={`transition-transform duration-300 ease-in-out bg-slate-900/80 backdrop-blur-xl border-l border-slate-700 flex flex-col absolute top-0 right-0 h-full z-30 ${isCodePanelVisible ? 'translate-x-0 w-full md:w-[50%] lg:w-[40%]' : 'translate-x-full w-full md:w-[50%] lg:w-[40%]'}`}>
+            <header className="flex items-center justify-between p-4 border-b border-slate-700 flex-shrink-0">
+              <div className="flex items-center gap-2">
+                <button onClick={() => setActiveCodeTab('html')} className={`px-3 py-1 text-sm rounded-md ${activeCodeTab === 'html' ? 'bg-sky-600' : 'bg-slate-700 hover:bg-slate-600'}`}>HTML</button>
+                <button onClick={() => setActiveCodeTab('css')} className={`px-3 py-1 text-sm rounded-md ${activeCodeTab === 'css' ? 'bg-sky-600' : 'bg-slate-700 hover:bg-slate-600'}`} disabled={!generatedCode?.css}>CSS</button>
+                <button onClick={() => setActiveCodeTab('js')} className={`px-3 py-1 text-sm rounded-md ${activeCodeTab === 'js' ? 'bg-sky-600' : 'bg-slate-700 hover:bg-slate-600'}`} disabled={!generatedCode?.js}>JS</button>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={handleCopyCode} className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-md bg-slate-700 hover:bg-slate-600 transition-colors disabled:opacity-50">
+                  {copied ? <ClipboardCheckIcon className="h-4 w-4 text-green-400"/> : <ClipboardIcon className="h-4 w-4"/>}
+                  {copied ? 'Copied!' : 'Copy'}
+                </button>
+                <button onClick={() => setIsCodePanelVisible(false)} className="p-1.5 rounded-md bg-slate-700 hover:bg-slate-600">
+                    <XIcon className="h-4 w-4" />
+                </button>
+              </div>
+            </header>
+            <div className="flex-1 overflow-auto bg-transparent min-h-0">
+              <pre className="text-sm h-full w-full p-4"><code className={`language-${activeCodeTab} whitespace-pre-wrap`}>{getActiveCode()}</code></pre>
+            </div>
+          </aside>
+        </div>
+
+        {isGithubModalOpen && <GitHubModal 
+          onClose={() => setIsGithubModalOpen(false)} 
+          code={generatedCode} 
+          auth={githubAuth}
+          setAuth={setGithubAuth}
+        />}
+      </div>
+    </>
   );
 };
 
