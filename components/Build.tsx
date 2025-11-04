@@ -310,7 +310,7 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
     try {
       if (!process.env.API_KEY) throw new Error("API_KEY environment variable not set");
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const model = 'gemini-2.5-pro';
+      const model = 'gemini-2.5-flash';
       
       const schema = {
           type: Type.OBJECT,
