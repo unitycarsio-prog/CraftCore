@@ -1,10 +1,11 @@
 
 
+
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, Chat } from "@google/genai";
 import * as htmlToImage from 'html-to-image';
 import { GeneratedCode, Page, ChatMessage, GitHubAuthState, Project } from '../types';
-import { ArrowLeftIcon, DesktopIcon, TabletIcon, MobileIcon, DownloadIcon, CodeIcon, ClipboardIcon, ClipboardCheckIcon, GitHubIcon, RestoreIcon, XIcon, SendIcon, UserIcon, BotIcon, ZapIcon, FileArchiveIcon, ExpandIcon, CompressIcon, SaveIcon, MenuIcon, PaperclipIcon, UploadIcon } from './Icons';
+import { ArrowLeftIcon, DesktopIcon, TabletIcon, MobileIcon, DownloadIcon, CodeIcon, ClipboardIcon, ClipboardCheckIcon, GitHubIcon, RestoreIcon, XIcon, SendIcon, UserIcon, BotIcon, ZapIcon, FileArchiveIcon, ExpandIcon, CompressIcon, SaveIcon, MenuIcon, PaperclipIcon, UploadIcon, VideoIcon, FileTextIcon } from './Icons';
 import Loader from './Loader';
 
 interface BuildProps {
@@ -20,7 +21,7 @@ interface UploadedFile {
   data: string; // base64 encoded
 }
 
-const Message: React.FC<{ message: ChatMessage; onRestore: (code: GeneratedCode) => void }> = React.memo(({ message, onRestore }) => {
+const Message: React.FC<{ message: ChatMessage; onRestore: (messageId: string) => void }> = React.memo(({ message, onRestore }) => {
     const isBot = message.role === 'bot';
 
     return (
@@ -30,7 +31,7 @@ const Message: React.FC<{ message: ChatMessage; onRestore: (code: GeneratedCode)
                 <p className="text-sm text-slate-200 whitespace-pre-wrap">{message.text}</p>
                 {message.isLoading && <div className="mt-2"><Loader/></div>}
                 {message.code && !message.isLoading && (
-                    <button onClick={() => onRestore(message.code!)} className="mt-2 flex items-center gap-1 text-xs px-2 py-1 bg-sky-600/50 hover:bg-sky-600 rounded transition-colors">
+                    <button onClick={() => onRestore(message.id)} className="mt-2 flex items-center gap-1 text-xs px-2 py-1 bg-sky-600/50 hover:bg-sky-600 rounded transition-colors">
                         <RestoreIcon className="h-3 w-3" /> Restore this version
                     </button>
                 )}
@@ -39,6 +40,17 @@ const Message: React.FC<{ message: ChatMessage; onRestore: (code: GeneratedCode)
         </div>
     );
 });
+
+const FilePreviewIcon: React.FC<{ fileType: string }> = ({ fileType }) => {
+    if (fileType.startsWith('video/')) {
+        return <VideoIcon className="h-5 w-5 text-slate-400" />;
+    }
+    if (fileType === 'application/pdf') {
+        return <FileTextIcon className="h-5 w-5 text-slate-400" />;
+    }
+    return <FileArchiveIcon className="h-5 w-5 text-slate-400" />;
+};
+
 
 const buildPreviewHtml = (code: GeneratedCode | null): string => {
     if (!code) return '';
@@ -123,6 +135,35 @@ const processPixabayPlaceholders = async (html: string): Promise<string> => {
     return processedHtml;
 };
 
+const processUserFilePlaceholders = async (html: string, files: UploadedFile[]): Promise<string> => {
+    if (files.length === 0) return html;
+
+    let processedHtml = html;
+    files.forEach((file, index) => {
+        const placeholder = `user-file://${index}`;
+        const dataUri = `data:${file.type};base64,${file.data}`;
+        // Use a regex to replace all occurrences of the placeholder, as it could be in src, href etc.
+        const regex = new RegExp(placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+        processedHtml = processedHtml.replace(regex, dataUri);
+    });
+
+    return processedHtml;
+};
+
+
+const buildHistoryFromMessages = (msgs: ChatMessage[]) => {
+    const history: { role: string; parts: { text: string }[] }[] = [];
+    msgs.forEach(msg => {
+        if (msg.role === 'user') {
+            history.push({ role: 'user', parts: [{ text: msg.text }] });
+        }
+        // IMPORTANT: Only include bot messages that have a valid rawCode response for accurate history
+        else if (msg.role === 'bot' && msg.rawCode) {
+            history.push({ role: 'model', parts: [{ text: JSON.stringify(msg.rawCode) }] });
+        }
+    });
+    return history;
+}
 
 const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
   const [newMessage, setNewMessage] = useState<string>('');
@@ -143,6 +184,7 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
+  const [chat, setChat] = useState<Chat | null>(null);
 
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -152,17 +194,91 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
 
   const initialHtmlContent = `<html><head><script src='https://cdn.tailwindcss.com'></script><style>body { background-color: #020617; display: flex; align-items: center; justify-content: center; height: 100vh; color: #475569; font-family: sans-serif; text-align: center; } .content { max-width: 400px; } h2 { color: #cbd5e1; font-size: 1.5rem; font-weight: bold; } p { margin-top: 1rem; }</style></head><body><div class='content'><svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="text-sky-400" style="margin: 0 auto 1rem auto; opacity: 0.3;"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5"></path><path d="M2 12l10 5 10-5"></path></svg><h2>Your Preview Awaits</h2><p>Describe your vision in the prompt below and watch the magic happen here.</p></div></body></html>`;
 
+  const systemInstruction = `You are a world-class AI web developer specializing in creating visually stunning, modern, and responsive websites. Your primary goal is to generate a complete, single-page website based on the user's prompt, and to meticulously apply changes when requested.
+
+**CORE DIRECTIVE: MODIFICATION & ITERATION**
+- When the user asks for a change, you **MUST** treat the provided "Current HTML", "Current CSS", and "Current JavaScript" as the definitive source of truth.
+- Your task is to **modify this existing code** according to the user's instructions. Do not start from scratch or ignore the provided code.
+- Analyze the user's request carefully. If they say "change the button color to red," find the relevant button in the HTML/CSS and apply that specific change.
+- Return the **complete, updated code** for all three files (HTML, CSS, JS), even if you only modified one. This is crucial for maintaining the state of the project.
+
+**FILE HANDLING HIERARCHY (CRITICAL):**
+
+1.  **PRIORITY #1: USER-PROVIDED FILES:**
+    *   If the user uploads files, you will receive a list of them with their type, name, and a placeholder for each (e.g., \`user-file://0\`).
+    *   You **MUST** use these placeholders in the appropriate HTML tags. My system will automatically replace these placeholders with the actual file data.
+    *   **Embedding rules based on file type:**
+        *   **Images (\`image/*\`):** Use an \`<img>\` tag. Example: \`<img src="user-file://0" alt="User provided content">\`
+        *   **Videos (\`video/*\`):** Use a \`<video>\` tag with controls. Example: \`<video controls src="user-file://1" class="w-full"></video>\`
+        *   **PDFs (\`application/pdf\`):** Use an \`<iframe>\` or \`<embed>\` tag. Example: \`<iframe src="user-file://2" width="100%" height="600px"></iframe>\`
+        *   **Other Files (documents, etc.):** Create a download link using an \`<a>\` tag with the \`download\` attribute set to the original filename. Example: \`<a href="user-file://3" download="annual_report.docx">Download Annual Report</a>\`
+    *   Integrate the user's files thoughtfully into the design as requested. **Do NOT attempt to use Base64 data yourself.**
+
+2.  **PRIORITY #2: PIXABAY FOR TOPIC-SPECIFIC IMAGES:**
+    *   If the user's request requires images and they haven't provided enough, you **MUST** use Pixabay image placeholders for high-quality, relevant images. This rule **only applies to images**, not other file types. My system will automatically convert these into real images.
+    *   To do this, set the \`src\` attribute of an \`<img>\` tag to this specific format: \`src="pixabay://<CATEGORY>/<KEYWORDS>"\`.
+    *   \`<CATEGORY>\`: You **MUST** choose the most relevant category from this list to ensure image relevance: \`backgrounds, fashion, nature, science, education, feelings, health, people, religion, places, animals, industry, computer, food, sports, transportation, travel, buildings, business, music\`.
+    *   \`<KEYWORDS>\`: Replace with specific, URL-friendly search terms using underscores for spaces (e.g., \`modern_architecture\` or \`snowy_mountains\`).
+    *   **CRITICAL:** Using a relevant category is mandatory for getting topic-specific images.
+
+3.  **NO GENERIC PLACEHOLDERS:** Under no circumstances should you use empty \`src=""\`, \`src="#"\`, or generic placeholders like \`https://placehold.co/...\`. Every single \`<img>\` tag must have a valid working source, either from a \`user-file://\` placeholder (if it's an image) or a \`pixabay://\` placeholder. All other media elements (\`<video>\`, \`<iframe>\`) and links (\`<a>\`) for user files must also use the \`user-file://\` placeholder.
+
+**USER REQUEST HANDLING:**
+- If asked to clone a website (e.g., "carwale.com"), create a **new, inspired design**. Populate it with relevant Pixabay placeholders and example text. Do not copy copyrighted assets.
+
+**TECHNICAL OUTPUT REQUIREMENTS:**
+You must always return a single, valid JSON object with three properties: 'html', 'css', and 'js'.
+
+1.  **HTML**: A full HTML5 document.
+    -   Must include \`<!DOCTYPE html>\`, \`<html>\`, \`<head>\`, and \`<body>\`.
+    -   The \`<head>\` MUST include a relevant \`<title>\` and the Tailwind CSS script: \`<script src="https://cdn.tailwindcss.com"></script>\`.
+    -   The \`<head>\` MUST link to the external stylesheet: \`<link rel="stylesheet" href="style.css">\`.
+    -   The \`<body>\` MUST include the script tag before closing: \`<script src="script.js" defer></script>\`.
+
+2.  **CSS**: Any necessary custom CSS for \`style.css\`.
+    -   Use Tailwind CSS classes in the HTML whenever possible. Only use custom CSS for things that Tailwind cannot handle (e.g., complex animations, very specific selectors).
+    -   Include a \`prefers-reduced-motion\` media query for all animations.
+
+3.  **JavaScript**: Any necessary vanilla JavaScript for interactivity in \`script.js\`.
+
+**FINAL CHECK:**
+1.  If this was a modification request, did I correctly apply the changes to the provided code?
+2.  Have I prioritized and used all user-provided files via \`user-file://\` placeholders?
+3.  Have I supplemented with \`pixabay://\` placeholders for images if needed?
+4.  Is my response a single, valid JSON object with 'html', 'css', and 'js' keys containing the full code?`;
+
   useEffect(() => {
     if (initialProject) {
         setGeneratedCode(initialProject.code);
         const projectMessages: ChatMessage[] = [
             { id: 'init', role: 'bot', text: 'Welcome! Describe the website you want to create. I can generate the HTML, CSS, and JavaScript for you.', timestamp: new Date() },
             { id: `user-${initialProject.id}`, role: 'user', text: initialProject.prompt, timestamp: new Date(initialProject.timestamp) },
-            { id: `bot-${initialProject.id}`, role: 'bot', text: 'Here is the website you requested.', code: initialProject.code, timestamp: new Date(initialProject.timestamp) }
+            { id: `bot-${initialProject.id}`, role: 'bot', text: 'Here is the website you requested.', code: initialProject.code, rawCode: initialProject.rawCode, timestamp: new Date(initialProject.timestamp) }
         ];
         setMessages(projectMessages);
+
+        // Re-hydrate chat session
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+        const history = buildHistoryFromMessages(projectMessages);
+        
+        const schema = {
+          type: Type.OBJECT,
+          properties: { 
+            html: { type: Type.STRING, description: 'The complete HTML code.' },
+            css: { type: Type.STRING, description: 'Optional: All custom CSS code for the `style.css` file.' },
+            js: { type: Type.STRING, description: 'Optional: All JavaScript code for the `script.js` file.' }
+          },
+          required: ['html']
+        };
+
+        const newChat = ai.chats.create({
+            model: 'gemini-2.5-flash',
+            config: { systemInstruction, responseMimeType: "application/json", responseSchema: schema },
+            history,
+        });
+        setChat(newChat);
     }
-  }, [initialProject]);
+  }, [initialProject, systemInstruction]);
 
   useEffect(() => {
     const storedToken = localStorage.getItem('githubToken');
@@ -242,16 +358,19 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
   const handleSaveProject = () => {
     if (!generatedCode || saveState !== 'idle') return;
 
+    const lastBotMessageWithCode = [...messages].reverse().find(m => m.role === 'bot' && !!m.code && !!m.rawCode);
     const lastUserMessage = messages.filter(m => m.role === 'user').pop();
-    if (!lastUserMessage) {
-        setError("Cannot save project without a user prompt in history.");
+
+    if (!lastUserMessage || !lastBotMessageWithCode) {
+        setError("Cannot save project without a valid user prompt and AI generation in history.");
         return;
     }
 
     const newProject: Project = {
         id: `proj-${Date.now()}`,
         prompt: lastUserMessage.text,
-        code: generatedCode,
+        code: lastBotMessageWithCode.code!,
+        rawCode: lastBotMessageWithCode.rawCode!,
         screenshot: null,
         timestamp: new Date().toISOString(),
     };
@@ -268,10 +387,10 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
   
   const processFiles = useCallback((files: FileList | null) => {
     if (files) {
-        const imageFiles = Array.from(files).filter(file => file.type.startsWith('image/'));
-        if (imageFiles.length === 0) return;
+        const acceptedFiles = Array.from(files);
+        if (acceptedFiles.length === 0) return;
 
-        imageFiles.forEach((file: File) => {
+        acceptedFiles.forEach((file: File) => {
             const reader = new FileReader();
             reader.onload = (loadEvent) => {
                 const base64String = (loadEvent.target?.result as string)?.split(',')[1];
@@ -302,167 +421,88 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
     setError(null);
     if(isSidebarOpen) setIsSidebarOpen(false);
     
-    const userMessage: ChatMessage = { id: `user-${Date.now()}`, role: 'user', text: userPrompt || `[${uploadedFiles.length} image(s) attached]`, timestamp: new Date() };
+    const userMessage: ChatMessage = { id: `user-${Date.now()}`, role: 'user', text: userPrompt || `[${uploadedFiles.length} file(s) attached]`, timestamp: new Date() };
     const botMessage: ChatMessage = { id: `bot-${Date.now()}`, role: 'bot', text: 'Thinking...', isLoading: true, timestamp: new Date() };
     setMessages(prev => [...prev, userMessage, botMessage]);
     setNewMessage('');
     
+    const filesForThisRequest = [...uploadedFiles];
+    setUploadedFiles([]);
+
     try {
-      if (!process.env.API_KEY) throw new Error("API_KEY environment variable not set");
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      
-      const schema = {
-          type: Type.OBJECT,
-          properties: { 
-            html: { type: Type.STRING, description: 'The complete HTML code.' },
-            css: { type: Type.STRING, description: 'Optional: All custom CSS code for the `style.css` file.' },
-            js: { type: Type.STRING, description: 'Optional: All JavaScript code for the `script.js` file.' }
-          },
-          required: ['html']
-      };
-      
-      const systemInstruction = `You are a world-class AI web developer specializing in creating visually stunning, modern, and responsive websites. Your primary goal is to generate a complete, single-page website based on the user's prompt, and to meticulously apply changes when requested.
+        if (!process.env.API_KEY) throw new Error("API_KEY environment variable not set");
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-**CORE DIRECTIVE: MODIFICATION & ITERATION**
-- When the user asks for a change, you **MUST** treat the provided "Current HTML", "Current CSS", and "Current JavaScript" as the definitive source of truth.
-- Your task is to **modify this existing code** according to the user's instructions. Do not start from scratch or ignore the provided code.
-- Analyze the user's request carefully. If they say "change the button color to red," find the relevant button in the HTML/CSS and apply that specific change.
-- Return the **complete, updated code** for all three files (HTML, CSS, JS), even if you only modified one. This is crucial for maintaining the state of the project.
-
-**IMAGE HANDLING HIERARCHY (CRITICAL):**
-
-1.  **PRIORITY #1: USER-PROVIDED IMAGES:**
-    *   If the user uploads images with their prompt, you **MUST** use them. This is your top priority.
-    *   To use an uploaded image, you must embed it directly into the HTML \`<img>\` tag's \`src\` attribute using a Base64 \`data:\` URI. The image data is provided to you in Base64 format. Example: \`<img src="data:image/jpeg;base64,..." />\`.
-    *   Integrate the user's images thoughtfully into the design as requested (e.g., as a profile picture, background, gallery image, etc.).
-
-2.  **PRIORITY #2: PIXABAY FOR TOPIC-SPECIFIC IMAGES:**
-    *   If the user's request requires more images than they provided, or if they did not provide any images, you **MUST** use Pixabay image placeholders for high-quality, relevant images. My system will automatically convert these into real images.
-    *   To do this, set the \`src\` attribute of an \`<img>\` tag to this specific format: \`src="pixabay://<CATEGORY>/<KEYWORDS>"\`.
-    *   \`<CATEGORY>\`: You **MUST** choose the most relevant category from this list to ensure image relevance: \`backgrounds, fashion, nature, science, education, feelings, health, people, religion, places, animals, industry, computer, food, sports, transportation, travel, buildings, business, music\`.
-    *   \`<KEYWORDS>\`: Replace with specific, URL-friendly search terms using underscores for spaces (e.g., \`modern_architecture\` or \`snowy_mountains\`). The keywords should be directly related to the main theme of the website. For a "car website," use specific keywords like \`sports_car\`, \`electric_suv\`, or \`classic_automobile\`.
-    *   **CRITICAL:** Using a relevant category is mandatory for getting topic-specific images.
-    *   **Example for a car website:** \`<img src="pixabay://transportation/luxury_sports_car" alt="A luxury sports car">\`
-    *   **Example for a nature blog:** \`<img src="pixabay://nature/serene_mountain_lake" alt="A serene mountain lake">\`
-    *   Aim for visually rich designs. If no user images are provided, include at least 3-5 relevant and specific Pixabay placeholders.
-
-3.  **NO PLACEHOLDERS (Standard):** Under no circumstances should you use empty \`src=""\`, \`src="#"\`, or generic placeholders like \`https://placehold.co/...\`. Every single \`<img>\` tag must have a valid working source, either a \`data:\` URI for user images or a \`pixabay://\` placeholder.
-
-**USER REQUEST HANDLING:**
-- If asked to clone a website (e.g., "carwale.com"), create a **new, inspired design**. Populate it with relevant Pixabay placeholders and example text. Do not copy copyrighted assets.
-
-**TECHNICAL OUTPUT REQUIREMENTS:**
-You must always return a single, valid JSON object with three properties: 'html', 'css', and 'js'.
-
-1.  **HTML**: A full HTML5 document.
-    -   Must include \`<!DOCTYPE html>\`, \`<html>\`, \`<head>\`, and \`<body>\`.
-    -   The \`<head>\` MUST include a relevant \`<title>\` and the Tailwind CSS script: \`<script src="https://cdn.tailwindcss.com"></script>\`.
-    -   The \`<head>\` MUST link to the external stylesheet: \`<link rel="stylesheet" href="style.css">\`.
-    -   The \`<body>\` MUST include the script tag before closing: \`<script src="script.js" defer></script>\`.
-
-2.  **CSS**: Any necessary custom CSS for \`style.css\`.
-    -   Use Tailwind CSS classes in the HTML whenever possible. Only use custom CSS for things that Tailwind cannot handle (e.g., complex animations, very specific selectors).
-    -   Include a \`prefers-reduced-motion\` media query for all animations.
-
-3.  **JavaScript**: Any necessary vanilla JavaScript for interactivity in \`script.js\`.
-
-**FINAL CHECK:**
-1.  If this was a modification request, did I correctly apply the changes to the provided code?
-2.  Have I prioritized and used all user-provided images as Base64 \`data:\` URIs?
-3.  Have I supplemented with \`pixabay://\` placeholders if needed?
-4.  Is my response a single, valid JSON object with 'html', 'css', and 'js' keys containing the full code?`;
-
-      let fullPrompt;
-      const imageInstruction = uploadedFiles.length > 0 ? `The user has provided ${uploadedFiles.length} image(s). Please incorporate them into the design as requested.` : '';
-
-      if (generatedCode) {
-          fullPrompt = `
-          ${imageInstruction}
-          My request is: "${userPrompt}".
-
-          Please modify the following existing website code based on my request.
-
-          Current HTML:
-          \`\`\`html
-          ${generatedCode.html}
-          \`\`\`
-
-          Current CSS:
-          \`\`\`css
-          ${generatedCode.css || '/* No custom CSS */'}
-          \`\`\`
-
-          Current JavaScript:
-          \`\`\`javascript
-          ${generatedCode.js || '// No custom JavaScript'}
-          \`\`\`
-
-          Remember to return the complete, updated code for all three files in the required JSON format.
-          `;
-      } else {
-          fullPrompt = `${imageInstruction} Generate a website for: "${userPrompt}"`;
-      }
-      
-      const parts = [
-        ...uploadedFiles.map(file => ({
-            inlineData: {
-                mimeType: file.type,
-                data: file.data,
+        const schema = {
+            type: Type.OBJECT,
+            properties: { 
+              html: { type: Type.STRING, description: 'The complete HTML code.' },
+              css: { type: Type.STRING, description: 'Optional: All custom CSS code for the `style.css` file.' },
+              js: { type: Type.STRING, description: 'Optional: All JavaScript code for the `script.js` file.' }
             },
-        })),
-        { text: fullPrompt },
-      ];
-      
-      setUploadedFiles([]);
+            required: ['html']
+        };
 
-      const primaryModel = 'gemini-2.5-flash';
-      const fallbackModel = 'gemini-2.5-pro';
-      let response;
+        const config = { systemInstruction, responseMimeType: "application/json", responseSchema: schema };
 
-      try {
-        response = await ai.models.generateContent({
-          model: primaryModel,
-          contents: { parts },
-          config: { systemInstruction: systemInstruction, responseMimeType: "application/json", responseSchema: schema },
-        });
-      } catch (err: any) {
-        const isOverloaded = err.message && (err.message.includes('overloaded') || err.message.includes('503'));
-        if (isOverloaded) {
-          console.warn(`Model ${primaryModel} is overloaded. Trying fallback model ${fallbackModel}.`);
-          const fallbackMessage = `The default model is busy. Trying a more powerful fallback...`;
-          setMessages(prev => prev.map(m => m.id === botMessage.id ? { ...m, text: fallbackMessage } : m));
-          
-          response = await ai.models.generateContent({
-            model: fallbackModel, // Using fallback model
-            contents: { parts },
-            config: { systemInstruction: systemInstruction, responseMimeType: "application/json", responseSchema: schema },
-          });
-        } else {
-          // It's a different, non-retryable error, so re-throw it to be caught by the outer block
-          throw err;
+        let fileInstruction = '';
+        if (filesForThisRequest.length > 0) {
+            const fileList = filesForThisRequest.map((file, i) => 
+                `- \`user-file://${i}\` (Type: ${file.type}, Name: ${file.name})`
+            ).join('\n');
+            fileInstruction = `The user has provided ${filesForThisRequest.length} file(s). Please incorporate them into the design using the specified placeholders and embedding rules:\n${fileList}\n\n`;
         }
-      }
-      
-      const jsonString = response.text.trim();
-      const parsed = JSON.parse(jsonString) as GeneratedCode;
-      
-      if (parsed.html) {
-          const finalHtml = await processPixabayPlaceholders(parsed.html);
-          const finalCode = { ...parsed, html: finalHtml };
-          setGeneratedCode(finalCode);
-          setMessages(prev => prev.map(m => m.id === botMessage.id ? { ...botMessage, text: 'Here are the changes you requested. What would you like to do next?', isLoading: false, code: finalCode } : m));
-      } else {
-          throw new Error("Invalid response format from AI. Missing HTML content.");
-      }
+        const fullPrompt = `${fileInstruction}${userPrompt}`;
+
+        const sendRequest = async (modelName: 'gemini-2.5-flash' | 'gemini-2.5-pro', existingChat: Chat | null, history?: any[]) => {
+            let session = existingChat;
+            if (!session || !session.model.includes(modelName)) {
+                session = ai.chats.create({ model: modelName, config, history });
+                setChat(session);
+            }
+            return await session.sendMessage({ message: fullPrompt });
+        };
+        
+        let response;
+        try {
+            response = await sendRequest('gemini-2.5-flash', chat);
+        } catch (err: any) {
+            const isOverloaded = err.message && (err.message.includes('overloaded') || err.message.includes('503'));
+            if (isOverloaded) {
+                console.warn(`Model gemini-2.5-flash is overloaded. Trying fallback model gemini-2.5-pro.`);
+                setMessages(prev => prev.map(m => m.id === botMessage.id ? { ...m, text: 'The default model is busy. Trying a more powerful fallback...' } : m));
+                
+                const history = buildHistoryFromMessages(messages.slice(0, -2)); // History before the current failed attempt
+                response = await sendRequest('gemini-2.5-pro', null, history);
+            } else {
+                throw err;
+            }
+        }
+
+        const jsonString = response.text.trim();
+        const rawCode = JSON.parse(jsonString) as GeneratedCode;
+
+        if (rawCode.html) {
+            let finalHtml = rawCode.html;
+            finalHtml = await processUserFilePlaceholders(finalHtml, filesForThisRequest);
+            finalHtml = await processPixabayPlaceholders(finalHtml);
+            
+            const finalCode = { ...rawCode, html: finalHtml };
+            setGeneratedCode(finalCode);
+            setMessages(prev => prev.map(m => m.id === botMessage.id ? { ...botMessage, text: 'Here are the changes you requested. What would you like to do next?', isLoading: false, code: finalCode, rawCode: rawCode } : m));
+        } else {
+            throw new Error("Invalid response format from AI. Missing HTML content.");
+        }
+
     } catch (err: any) {
-      console.error(err);
-      const errorMessage = `Failed to generate website. ${err.message || 'Please try again.'}`;
-      setError(errorMessage);
-      setMessages(prev => prev.map(m => m.id === botMessage.id ? { ...botMessage, text: errorMessage, isLoading: false } : m));
+        console.error(err);
+        const errorMessage = `Failed to generate website. ${err.message || 'Please try again.'}`;
+        setError(errorMessage);
+        setMessages(prev => prev.map(m => m.id === botMessage.id ? { ...botMessage, text: errorMessage, isLoading: false } : m));
     } finally {
-      setIsLoading(false);
+        setIsLoading(false);
     }
-  }, [newMessage, isLoading, generatedCode, isSidebarOpen, uploadedFiles]);
+  }, [newMessage, isLoading, isSidebarOpen, uploadedFiles, chat, messages, systemInstruction]);
 
   const triggerDownload = (filename: string, content: string, mimeType: string) => {
     const blob = new Blob([content], { type: mimeType });
@@ -506,9 +546,38 @@ You must always return a single, valid JSON object with three properties: 'html'
     });
   };
   
-  const handleRestoreHistory = (code: GeneratedCode) => {
-    setGeneratedCode(code);
-  };
+  const handleRestoreHistory = (messageId: string) => {
+    const messageIndex = messages.findIndex(m => m.id === messageId);
+    const messageToRestore = messages[messageIndex];
+
+    if (!messageToRestore || !messageToRestore.code || !messageToRestore.rawCode) return;
+
+    setGeneratedCode(messageToRestore.code);
+
+    // Rebuild history up to and including the restored message
+    const historySlice = messages.slice(0, messageIndex + 1);
+    const historyForChat = buildHistoryFromMessages(historySlice);
+    
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+    const schema = {
+      type: Type.OBJECT, properties: { html: { type: Type.STRING }, css: { type: Type.STRING }, js: { type: Type.STRING } }, required: ['html']
+    };
+
+    const newChat = ai.chats.create({
+        model: 'gemini-2.5-flash',
+        config: { systemInstruction, responseMimeType: "application/json", responseSchema: schema },
+        history: historyForChat
+    });
+    setChat(newChat);
+
+    const restoreNotification: ChatMessage = {
+        id: `restore-${Date.now()}`,
+        role: 'bot',
+        text: `Restored to a previous version. You can now continue iterating from this point.`,
+        timestamp: new Date()
+    };
+    setMessages(prev => [...prev.slice(0, messageIndex + 1), restoreNotification]);
+};
   
   const getActiveCode = () => {
     if (!generatedCode) return '';
@@ -579,7 +648,7 @@ You must always return a single, valid JSON object with three properties: 'html'
             <div className="absolute inset-0 bg-sky-900/80 backdrop-blur-sm z-40 flex items-center justify-center m-2 border-2 border-dashed border-sky-400 rounded-lg">
                 <div className="text-center">
                     <UploadIcon className="h-12 w-12 mx-auto text-sky-300" />
-                    <p className="mt-2 font-semibold text-white">Drop your images here</p>
+                    <p className="mt-2 font-semibold text-white">Drop your files here</p>
                 </div>
             </div>
           )}
@@ -629,7 +698,13 @@ You must always return a single, valid JSON object with three properties: 'html'
                 <div className="mb-2 flex flex-wrap gap-2 p-2 bg-slate-800/50 rounded-lg">
                     {uploadedFiles.map((file, index) => (
                         <div key={index} className="relative bg-slate-700 p-1 rounded-md flex items-center gap-2 text-xs">
-                            <img src={`data:${file.type};base64,${file.data}`} alt={file.name} className="h-8 w-8 object-cover rounded" />
+                           {file.type.startsWith('image/') ? (
+                                <img src={`data:${file.type};base64,${file.data}`} alt={file.name} className="h-8 w-8 object-cover rounded" />
+                            ) : (
+                                <div className="h-8 w-8 flex items-center justify-center bg-slate-800 rounded">
+                                    <FilePreviewIcon fileType={file.type} />
+                                </div>
+                            )}
                             <span className="max-w-[100px] truncate text-slate-300" title={file.name}>{file.name}</span>
                             <button onClick={() => handleRemoveFile(index)} className="absolute -top-1.5 -right-1.5 bg-slate-900 rounded-full p-0.5 text-slate-400 hover:bg-red-500 hover:text-white transition-colors">
                                 <XIcon className="h-3 w-3" />
@@ -639,12 +714,12 @@ You must always return a single, valid JSON object with three properties: 'html'
                 </div>
             )}
             <form onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }} className="relative">
-              <input type="file" ref={fileInputRef} onChange={handleFileChange} multiple accept="image/*" className="hidden" />
+              <input type="file" ref={fileInputRef} onChange={handleFileChange} multiple accept="image/*,video/*,application/pdf,.doc,.docx,.txt" className="hidden" />
               <textarea
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } }}
-                placeholder="Attach images and describe your vision..."
+                placeholder="Attach files and describe your vision..."
                 className="w-full p-3 pr-24 bg-slate-800 border border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500 transition-colors text-slate-200 text-sm placeholder:text-slate-500 resize-none"
                 rows={3}
                 disabled={isLoading}

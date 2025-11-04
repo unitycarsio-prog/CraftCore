@@ -15,7 +15,8 @@ export interface ChatMessage {
   id: string;
   role: MessageRole;
   text: string;
-  code?: GeneratedCode; // The generated website code for bot messages
+  code?: GeneratedCode; // The PROCESSED code for preview
+  rawCode?: GeneratedCode; // The UNPROCESSED code from the AI for history
   isLoading?: boolean; // To show a 'thinking' indicator for bot messages
   timestamp: Date;
 }
@@ -27,9 +28,10 @@ export type GitHubAuthState = {
 };
 
 export interface Project {
-  id: string;
+  id:string;
   prompt: string;
-  code: GeneratedCode;
+  code: GeneratedCode; // Processed for preview
+  rawCode: GeneratedCode; // Raw from AI for history
   screenshot: string | null;
   timestamp: string;
 }
