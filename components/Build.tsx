@@ -310,7 +310,6 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
     try {
       if (!process.env.API_KEY) throw new Error("API_KEY environment variable not set");
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const model = 'gemini-2.5-flash';
       
       const schema = {
           type: Type.OBJECT,
@@ -416,37 +415,32 @@ You must always return a single, valid JSON object with three properties: 'html'
       
       setUploadedFiles([]);
 
+      const primaryModel = 'gemini-2.5-flash';
+      const fallbackModel = 'gemini-2.5-pro';
       let response;
-      const maxRetries = 3;
-      const retryDelay = 2000;
 
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
+      try {
+        response = await ai.models.generateContent({
+          model: primaryModel,
+          contents: { parts },
+          config: { systemInstruction: systemInstruction, responseMimeType: "application/json", responseSchema: schema },
+        });
+      } catch (err: any) {
+        const isOverloaded = err.message && (err.message.includes('overloaded') || err.message.includes('503'));
+        if (isOverloaded) {
+          console.warn(`Model ${primaryModel} is overloaded. Trying fallback model ${fallbackModel}.`);
+          const fallbackMessage = `The default model is busy. Trying a more powerful fallback...`;
+          setMessages(prev => prev.map(m => m.id === botMessage.id ? { ...m, text: fallbackMessage } : m));
+          
           response = await ai.models.generateContent({
-            model: model,
+            model: fallbackModel, // Using fallback model
             contents: { parts },
             config: { systemInstruction: systemInstruction, responseMimeType: "application/json", responseSchema: schema },
           });
-          break; // Success, exit loop
-        } catch (err: any) {
-          const isOverloaded = err.message && (err.message.includes('overloaded') || err.message.includes('503'));
-          if (isOverloaded && attempt < maxRetries) {
-            console.warn(`Attempt ${attempt} failed: Model overloaded. Retrying in ${retryDelay / 1000}s...`);
-            const retryMessage = `The AI is currently busy. Retrying... (Attempt ${attempt}/${maxRetries - 1})`;
-            setMessages(prev => prev.map(m => m.id === botMessage.id ? { ...m, text: retryMessage } : m));
-            await new Promise(resolve => setTimeout(resolve, retryDelay));
-          } else if (isOverloaded) {
-            // Last attempt failed
-            throw new Error("The AI model is currently overloaded. Please try again in a few moments.");
-          } else {
-            // Non-retryable error
-            throw err;
-          }
+        } else {
+          // It's a different, non-retryable error, so re-throw it to be caught by the outer block
+          throw err;
         }
-      }
-
-      if (!response) {
-          throw new Error("Failed to get a response from the AI model after multiple retries.");
       }
       
       const jsonString = response.text.trim();
