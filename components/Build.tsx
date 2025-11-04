@@ -4,7 +4,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { GoogleGenAI, Type } from "@google/genai";
 import * as htmlToImage from 'html-to-image';
 import { GeneratedCode, Page, ChatMessage, GitHubAuthState, Project } from '../types';
-import { ArrowLeftIcon, DesktopIcon, TabletIcon, MobileIcon, DownloadIcon, CodeIcon, ClipboardIcon, ClipboardCheckIcon, GitHubIcon, RestoreIcon, XIcon, SendIcon, UserIcon, BotIcon, ZapIcon, FileArchiveIcon, ExpandIcon, CompressIcon, SaveIcon, MenuIcon, PaperclipIcon } from './Icons';
+import { ArrowLeftIcon, DesktopIcon, TabletIcon, MobileIcon, DownloadIcon, CodeIcon, ClipboardIcon, ClipboardCheckIcon, GitHubIcon, RestoreIcon, XIcon, SendIcon, UserIcon, BotIcon, ZapIcon, FileArchiveIcon, ExpandIcon, CompressIcon, SaveIcon, MenuIcon, PaperclipIcon, UploadIcon } from './Icons';
 import Loader from './Loader';
 
 interface BuildProps {
@@ -63,6 +63,66 @@ const buildPreviewHtml = (code: GeneratedCode | null): string => {
     return finalHtml;
 }
 
+const processPixabayPlaceholders = async (html: string): Promise<string> => {
+    const PIXABAY_API_KEY = '51133158-18fb33fc945bd1819e06acba2';
+    const placeholderRegex = /src="pixabay:\/\/([^"]+)"/g;
+    const matches = [...html.matchAll(placeholderRegex)];
+
+    if (matches.length === 0) {
+        return html;
+    }
+
+    const replacements = await Promise.all(matches.map(async (match, index) => {
+        const originalSrc = match[0];
+        const fullQuery = match[1];
+
+        let category = '';
+        let query = '';
+
+        // New format is "category/keywords", fallback for "keywords"
+        if (fullQuery.includes('/')) {
+            const parts = fullQuery.split('/');
+            category = parts[0];
+            query = parts.slice(1).join('_').replace(/_/g, ' '); 
+        } else {
+            query = fullQuery.replace(/_/g, ' ');
+        }
+        
+        try {
+            let apiUrl = `https://pixabay.com/api/?key=${PIXABAY_API_KEY}&q=${encodeURIComponent(query)}&image_type=photo&per_page=20&safesearch=true`;
+            if (category) {
+                apiUrl += `&category=${encodeURIComponent(category)}`;
+            }
+            const response = await fetch(apiUrl);
+
+            if (!response.ok) {
+                throw new Error(`Pixabay API error: ${response.statusText}`);
+            }
+            const data = await response.json();
+            // Use a different image for each placeholder to avoid repetition
+            if (data.hits && data.hits.length > 0) {
+                const image = data.hits[index % data.hits.length];
+                if (image && image.webformatURL) {
+                    return { original: originalSrc, newSrc: `src="${image.webformatURL}"` };
+                }
+            }
+        } catch (error) {
+            console.error(`Failed to fetch image from Pixabay for query: ${fullQuery}`, error);
+        }
+        // Fallback to a generic placeholder if API fails or no image is found
+        return { original: originalSrc, newSrc: `src="https://source.unsplash.com/1600x900/?${query}"` }; 
+    }));
+
+    let processedHtml = html;
+    for (const replacement of replacements) {
+        if (replacement) {
+            processedHtml = processedHtml.replace(replacement.original, replacement.newSrc);
+        }
+    }
+
+    return processedHtml;
+};
+
 
 const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
   const [newMessage, setNewMessage] = useState<string>('');
@@ -82,11 +142,13 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
   const [saveState, setSaveState] = useState<'idle' | 'saved'>('idle');
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+  const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
 
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragCounter = useRef(0);
 
   const initialHtmlContent = `<html><head><script src='https://cdn.tailwindcss.com'></script><style>body { background-color: #020617; display: flex; align-items: center; justify-content: center; height: 100vh; color: #475569; font-family: sans-serif; text-align: center; } .content { max-width: 400px; } h2 { color: #cbd5e1; font-size: 1.5rem; font-weight: bold; } p { margin-top: 1rem; }</style></head><body><div class='content'><svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="text-sky-400" style="margin: 0 auto 1rem auto; opacity: 0.3;"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5"></path><path d="M2 12l10 5 10-5"></path></svg><h2>Your Preview Awaits</h2><p>Describe your vision in the prompt below and watch the magic happen here.</p></div></body></html>`;
 
@@ -204,11 +266,12 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
     generateAndSaveScreenshot(newProject.id);
   };
   
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (event.target.files) {
-        const files = Array.from(event.target.files);
-        // Fix: Explicitly type `file` as `File` to resolve TypeScript inference issues.
-        files.forEach((file: File) => {
+  const processFiles = useCallback((files: FileList | null) => {
+    if (files) {
+        const imageFiles = Array.from(files).filter(file => file.type.startsWith('image/'));
+        if (imageFiles.length === 0) return;
+
+        imageFiles.forEach((file: File) => {
             const reader = new FileReader();
             reader.onload = (loadEvent) => {
                 const base64String = (loadEvent.target?.result as string)?.split(',')[1];
@@ -218,9 +281,13 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
             };
             reader.readAsDataURL(file);
         });
-        // Reset file input to allow selecting the same file again
-        event.target.value = '';
     }
+  }, []);
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    processFiles(event.target.files);
+    // Reset file input to allow selecting the same file again
+    event.target.value = '';
   };
 
   const handleRemoveFile = (index: number) => {
@@ -243,7 +310,7 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
     try {
       if (!process.env.API_KEY) throw new Error("API_KEY environment variable not set");
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const model = 'gemini-2.5-flash';
+      const model = 'gemini-2.5-pro';
       
       const schema = {
           type: Type.OBJECT,
@@ -255,18 +322,35 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
           required: ['html']
       };
       
-      const systemInstruction = `**ABSOLUTE LAW: YOUR RESPONSE IS A FAILURE AND WILL BE REJECTED IF IT DOES NOT CONTAIN AT LEAST 5 HIGH-QUALITY, RELEVANT, COPYRIGHT-FREE IMAGES FROM UNSPLASH.**
+      const systemInstruction = `You are a world-class AI web developer specializing in creating visually stunning, modern, and responsive websites. Your primary goal is to generate a complete, single-page website based on the user's prompt, and to meticulously apply changes when requested.
 
-You are a world-class AI web developer specializing in creating visually stunning websites. Your primary goal is to generate a complete, single-page website based on the user's prompt. Your entire purpose is to create beautiful, image-rich designs.
+**CORE DIRECTIVE: MODIFICATION & ITERATION**
+- When the user asks for a change, you **MUST** treat the provided "Current HTML", "Current CSS", and "Current JavaScript" as the definitive source of truth.
+- Your task is to **modify this existing code** according to the user's instructions. Do not start from scratch or ignore the provided code.
+- Analyze the user's request carefully. If they say "change the button color to red," find the relevant button in the HTML/CSS and apply that specific change.
+- Return the **complete, updated code** for all three files (HTML, CSS, JS), even if you only modified one. This is crucial for maintaining the state of the project.
 
-**CRITICAL IMAGE INSTRUCTIONS (NON-NEGOTIABLE):**
-1.  **MANDATORY IMAGES:** Every single website you create MUST include a minimum of five (5) relevant images. A response without images is a failed response.
-2.  **USE UNSPLASH:** You must source all images from Unsplash using their source URL. For example: \`https://source.unsplash.com/1600x900/?<KEYWORDS>\`. Replace \`<KEYWORDS>\` with terms directly related to the user's request (e.g., for a "car website," use keywords like \`car,racing,engine\`).
-3.  **NO PLACEHOLDERS:** Under no circumstances should you use empty \`src=""\` or \`src="#"\`. Every single \`<img>\` tag must have a valid, working Unsplash URL.
+**IMAGE HANDLING HIERARCHY (CRITICAL):**
+
+1.  **PRIORITY #1: USER-PROVIDED IMAGES:**
+    *   If the user uploads images with their prompt, you **MUST** use them. This is your top priority.
+    *   To use an uploaded image, you must embed it directly into the HTML \`<img>\` tag's \`src\` attribute using a Base64 \`data:\` URI. The image data is provided to you in Base64 format. Example: \`<img src="data:image/jpeg;base64,..." />\`.
+    *   Integrate the user's images thoughtfully into the design as requested (e.g., as a profile picture, background, gallery image, etc.).
+
+2.  **PRIORITY #2: PIXABAY FOR TOPIC-SPECIFIC IMAGES:**
+    *   If the user's request requires more images than they provided, or if they did not provide any images, you **MUST** use Pixabay image placeholders for high-quality, relevant images. My system will automatically convert these into real images.
+    *   To do this, set the \`src\` attribute of an \`<img>\` tag to this specific format: \`src="pixabay://<CATEGORY>/<KEYWORDS>"\`.
+    *   \`<CATEGORY>\`: You **MUST** choose the most relevant category from this list to ensure image relevance: \`backgrounds, fashion, nature, science, education, feelings, health, people, religion, places, animals, industry, computer, food, sports, transportation, travel, buildings, business, music\`.
+    *   \`<KEYWORDS>\`: Replace with specific, URL-friendly search terms using underscores for spaces (e.g., \`modern_architecture\` or \`snowy_mountains\`). The keywords should be directly related to the main theme of the website. For a "car website," use specific keywords like \`sports_car\`, \`electric_suv\`, or \`classic_automobile\`.
+    *   **CRITICAL:** Using a relevant category is mandatory for getting topic-specific images.
+    *   **Example for a car website:** \`<img src="pixabay://transportation/luxury_sports_car" alt="A luxury sports car">\`
+    *   **Example for a nature blog:** \`<img src="pixabay://nature/serene_mountain_lake" alt="A serene mountain lake">\`
+    *   Aim for visually rich designs. If no user images are provided, include at least 3-5 relevant and specific Pixabay placeholders.
+
+3.  **NO PLACEHOLDERS (Standard):** Under no circumstances should you use empty \`src=""\`, \`src="#"\`, or generic placeholders like \`https://placehold.co/...\`. Every single \`<img>\` tag must have a valid working source, either a \`data:\` URI for user images or a \`pixabay://\` placeholder.
 
 **USER REQUEST HANDLING:**
--   If asked to clone a website (e.g., "carwale.com"), create a **new, inspired design**. Populate it with relevant Unsplash images and placeholder text. Do not copy copyrighted assets.
--   If given existing code, modify it as requested. Otherwise, create from scratch.
+- If asked to clone a website (e.g., "carwale.com"), create a **new, inspired design**. Populate it with relevant Pixabay placeholders and example text. Do not copy copyrighted assets.
 
 **TECHNICAL OUTPUT REQUIREMENTS:**
 You must always return a single, valid JSON object with three properties: 'html', 'css', and 'js'.
@@ -278,19 +362,19 @@ You must always return a single, valid JSON object with three properties: 'html'
     -   The \`<body>\` MUST include the script tag before closing: \`<script src="script.js" defer></script>\`.
 
 2.  **CSS**: Any necessary custom CSS for \`style.css\`.
+    -   Use Tailwind CSS classes in the HTML whenever possible. Only use custom CSS for things that Tailwind cannot handle (e.g., complex animations, very specific selectors).
     -   Include a \`prefers-reduced-motion\` media query for all animations.
 
 3.  **JavaScript**: Any necessary vanilla JavaScript for interactivity in \`script.js\`.
 
-**FINAL CHECK (DO NOT RESPOND UNLESS 'YES' TO ALL):**
-1.  Does my HTML contain at least FIVE (5) valid 'https://source.unsplash.com' image URLs?
-2.  Is the overall design visually impressive and professional?
-3.  Is my response a single, valid JSON object with 'html', 'css', and 'js' keys?
-
-**A response without images is a broken response. Do not provide a broken response.**`;
+**FINAL CHECK:**
+1.  If this was a modification request, did I correctly apply the changes to the provided code?
+2.  Have I prioritized and used all user-provided images as Base64 \`data:\` URIs?
+3.  Have I supplemented with \`pixabay://\` placeholders if needed?
+4.  Is my response a single, valid JSON object with 'html', 'css', and 'js' keys containing the full code?`;
 
       let fullPrompt;
-      const imageInstruction = uploadedFiles.length > 0 ? `The user has provided ${uploadedFiles.length} image(s) to use.` : '';
+      const imageInstruction = uploadedFiles.length > 0 ? `The user has provided ${uploadedFiles.length} image(s). Please incorporate them into the design as requested.` : '';
 
       if (generatedCode) {
           fullPrompt = `
@@ -332,7 +416,6 @@ You must always return a single, valid JSON object with three properties: 'html'
       
       setUploadedFiles([]);
 
-      // Fix: Aligned with Gemini API guidelines by passing systemInstruction as a direct string.
       const response = await ai.models.generateContent({
         model: model,
         contents: { parts },
@@ -343,8 +426,10 @@ You must always return a single, valid JSON object with three properties: 'html'
       const parsed = JSON.parse(jsonString) as GeneratedCode;
       
       if (parsed.html) {
-          setGeneratedCode(parsed);
-          setMessages(prev => prev.map(m => m.id === botMessage.id ? { ...botMessage, text: 'Here are the changes you requested. What would you like to do next?', isLoading: false, code: parsed } : m));
+          const finalHtml = await processPixabayPlaceholders(parsed.html);
+          const finalCode = { ...parsed, html: finalHtml };
+          setGeneratedCode(finalCode);
+          setMessages(prev => prev.map(m => m.id === botMessage.id ? { ...botMessage, text: 'Here are the changes you requested. What would you like to do next?', isLoading: false, code: finalCode } : m));
       } else {
           throw new Error("Invalid response format from AI. Missing HTML content.");
       }
@@ -416,6 +501,40 @@ You must always return a single, valid JSON object with three properties: 'html'
   
   const toggleFullscreen = () => setIsFullscreen(!isFullscreen);
 
+  const handleDragEnter = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current++;
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+        setIsDraggingOver(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounter.current--;
+    if (dragCounter.current === 0) {
+        setIsDraggingOver(false);
+    }
+  };
+  
+  const handleDragOver = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation(); // Necessary to allow dropping
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(false);
+    dragCounter.current = 0;
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        processFiles(e.dataTransfer.files);
+        e.dataTransfer.clearData();
+    }
+  };
+
   const previewWidths: Record<PreviewMode, string> = { desktop: 'w-full', tablet: 'w-[768px]', mobile: 'w-[375px]' };
 
   return (
@@ -429,7 +548,20 @@ You must always return a single, valid JSON object with three properties: 'html'
       )}
       <div className="flex h-screen w-screen bg-slate-900 text-white font-sans overflow-hidden">
         {/* Left Sidebar */}
-        <aside className={`absolute lg:relative z-30 w-[90%] sm:w-[380px] flex-shrink-0 bg-slate-950 flex flex-col h-full border-r border-slate-800 transition-transform duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0`}>
+        <aside 
+          onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+          className={`absolute lg:relative z-30 w-[90%] sm:w-[380px] flex-shrink-0 bg-slate-950 flex flex-col h-full border-r border-slate-800 transition-transform duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0`}>
+          {isDraggingOver && (
+            <div className="absolute inset-0 bg-sky-900/80 backdrop-blur-sm z-40 flex items-center justify-center m-2 border-2 border-dashed border-sky-400 rounded-lg">
+                <div className="text-center">
+                    <UploadIcon className="h-12 w-12 mx-auto text-sky-300" />
+                    <p className="mt-2 font-semibold text-white">Drop your images here</p>
+                </div>
+            </div>
+          )}
           {/* Sidebar Header */}
           <header className="flex-shrink-0 p-4 border-b border-slate-800">
             <div className="flex items-center justify-between">
