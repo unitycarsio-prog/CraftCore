@@ -90,7 +90,7 @@ const Home: React.FC<HomeProps> = ({ onNavigate }) => {
                     Your Vision, Instantly Realized.
                 </h1>
                 <p className="mt-6 max-w-xl mx-auto lg:mx-0 text-lg text-slate-300">
-                    Go from a simple text prompt to a fully-functional, ready-to-ship website. Genesis is your creative partner for building on the web.
+                    Go from a simple text prompt to a fully-functional, ready-to-ship website. CraftCore is your creative partner for building on the web.
                 </p>
                 <div className="mt-10 flex items-center justify-center lg:justify-start gap-x-4">
                   <button

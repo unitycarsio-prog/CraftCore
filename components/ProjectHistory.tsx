@@ -50,7 +50,7 @@ const ProjectHistory: React.FC<ProjectHistoryProps> = ({ onLoadProject }) => {
 
     useEffect(() => {
         try {
-            const stored = localStorage.getItem('genesis-projects');
+            const stored = localStorage.getItem('craftcore-projects');
             if (stored) {
                 setProjects(JSON.parse(stored));
             }
@@ -61,7 +61,7 @@ const ProjectHistory: React.FC<ProjectHistoryProps> = ({ onLoadProject }) => {
 
     const handleClearHistory = () => {
         if (window.confirm("Are you sure you want to delete all your projects? This cannot be undone.")) {
-            localStorage.removeItem('genesis-projects');
+            localStorage.removeItem('craftcore-projects');
             setProjects([]);
         }
     };

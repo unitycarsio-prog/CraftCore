@@ -1,9 +1,10 @@
 
+
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { GoogleGenAI, Type } from "@google/genai";
 import * as htmlToImage from 'html-to-image';
 import { GeneratedCode, Page, ChatMessage, GitHubAuthState, Project } from '../types';
-import { ArrowLeftIcon, DesktopIcon, TabletIcon, MobileIcon, DownloadIcon, CodeIcon, ClipboardIcon, ClipboardCheckIcon, GitHubIcon, RestoreIcon, XIcon, SendIcon, UserIcon, BotIcon, ZapIcon, FileArchiveIcon, ExpandIcon, CompressIcon, SaveIcon, MenuIcon } from './Icons';
+import { ArrowLeftIcon, DesktopIcon, TabletIcon, MobileIcon, DownloadIcon, CodeIcon, ClipboardIcon, ClipboardCheckIcon, GitHubIcon, RestoreIcon, XIcon, SendIcon, UserIcon, BotIcon, ZapIcon, FileArchiveIcon, ExpandIcon, CompressIcon, SaveIcon, MenuIcon, PaperclipIcon } from './Icons';
 import Loader from './Loader';
 
 interface BuildProps {
@@ -12,6 +13,12 @@ interface BuildProps {
 }
 
 type PreviewMode = 'desktop' | 'tablet' | 'mobile';
+
+interface UploadedFile {
+  name: string;
+  type: string;
+  data: string; // base64 encoded
+}
 
 const Message: React.FC<{ message: ChatMessage; onRestore: (code: GeneratedCode) => void }> = React.memo(({ message, onRestore }) => {
     const isBot = message.role === 'bot';
@@ -72,11 +79,14 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
   const [isGithubModalOpen, setIsGithubModalOpen] = useState<boolean>(false);
   const [githubAuth, setGithubAuth] = useState<GitHubAuthState>({ status: 'idle' });
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [saveState, setSaveState] = useState<'idle' | 'saved'>('idle');
   const [isSidebarOpen, setIsSidebarOpen] = useState<boolean>(false);
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const initialHtmlContent = `<html><head><script src='https://cdn.tailwindcss.com'></script><style>body { background-color: #020617; display: flex; align-items: center; justify-content: center; height: 100vh; color: #475569; font-family: sans-serif; text-align: center; } .content { max-width: 400px; } h2 { color: #cbd5e1; font-size: 1.5rem; font-weight: bold; } p { margin-top: 1rem; }</style></head><body><div class='content'><svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="text-sky-400" style="margin: 0 auto 1rem auto; opacity: 0.3;"><path d="M12 2L2 7l10 5 10-5-10-5z"></path><path d="M2 17l10 5 10-5"></path><path d="M2 12l10 5 10-5"></path></svg><h2>Your Preview Awaits</h2><p>Describe your vision in the prompt below and watch the magic happen here.</p></div></body></html>`;
 
@@ -142,54 +152,90 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
     };
   }, [generatedCode, initialHtmlContent]);
 
+  const generateAndSaveScreenshot = async (projectId: string) => {
+    if (!iframeRef.current?.contentDocument?.body) return;
 
-  const handleSaveProject = async () => {
-    if (!generatedCode || !iframeRef.current?.contentDocument?.body) return;
-
-    setSaveState('saving');
     try {
-        const screenshotDataUrl = await htmlToImage.toPng(iframeRef.current.contentDocument.body, {
+        const screenshotDataUrl = await htmlToImage.toJpeg(iframeRef.current.contentDocument.body, {
+            quality: 0.8,
+            pixelRatio: 1,
             width: iframeRef.current.offsetWidth,
             height: iframeRef.current.offsetHeight,
             style: { margin: '0' }
         });
 
-        const lastUserMessage = messages.filter(m => m.role === 'user').pop();
-        if (!lastUserMessage) {
-             throw new Error("Cannot save project without a user prompt in history.");
+        const existingProjects: Project[] = JSON.parse(localStorage.getItem('craftcore-projects') || '[]');
+        const projectIndex = existingProjects.findIndex(p => p.id === projectId);
+
+        if (projectIndex > -1) {
+            existingProjects[projectIndex].screenshot = screenshotDataUrl;
+            localStorage.setItem('craftcore-projects', JSON.stringify(existingProjects));
         }
-
-        const newProject: Project = {
-            id: `proj-${Date.now()}`,
-            prompt: lastUserMessage.text,
-            code: generatedCode,
-            screenshot: screenshotDataUrl,
-            timestamp: new Date().toISOString(),
-        };
-
-        const existingProjects: Project[] = JSON.parse(localStorage.getItem('genesis-projects') || '[]');
-        const updatedProjects = [newProject, ...existingProjects].slice(0, 12);
-        localStorage.setItem('genesis-projects', JSON.stringify(updatedProjects));
-
-        setSaveState('saved');
-        setTimeout(() => setSaveState('idle'), 2000);
-
     } catch (err) {
-        console.error("Failed to save project:", err);
-        setError("Failed to save project. Could not capture screenshot.");
-        setSaveState('idle');
+        console.error("Failed to generate screenshot in background:", err);
     }
+  };
+
+
+  const handleSaveProject = () => {
+    if (!generatedCode || saveState !== 'idle') return;
+
+    const lastUserMessage = messages.filter(m => m.role === 'user').pop();
+    if (!lastUserMessage) {
+        setError("Cannot save project without a user prompt in history.");
+        return;
+    }
+
+    const newProject: Project = {
+        id: `proj-${Date.now()}`,
+        prompt: lastUserMessage.text,
+        code: generatedCode,
+        screenshot: null,
+        timestamp: new Date().toISOString(),
+    };
+
+    const existingProjects: Project[] = JSON.parse(localStorage.getItem('craftcore-projects') || '[]');
+    const updatedProjects = [newProject, ...existingProjects].slice(0, 12);
+    localStorage.setItem('craftcore-projects', JSON.stringify(updatedProjects));
+
+    setSaveState('saved');
+    setTimeout(() => setSaveState('idle'), 2000);
+
+    generateAndSaveScreenshot(newProject.id);
+  };
+  
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files) {
+        const files = Array.from(event.target.files);
+        // Fix: Explicitly type `file` as `File` to resolve TypeScript inference issues.
+        files.forEach((file: File) => {
+            const reader = new FileReader();
+            reader.onload = (loadEvent) => {
+                const base64String = (loadEvent.target?.result as string)?.split(',')[1];
+                if (base64String) {
+                    setUploadedFiles(prev => [...prev, { name: file.name, type: file.type, data: base64String }]);
+                }
+            };
+            reader.readAsDataURL(file);
+        });
+        // Reset file input to allow selecting the same file again
+        event.target.value = '';
+    }
+  };
+
+  const handleRemoveFile = (index: number) => {
+      setUploadedFiles(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleSendMessage = useCallback(async () => {
     const userPrompt = newMessage.trim();
-    if (!userPrompt || isLoading) return;
+    if ((!userPrompt && uploadedFiles.length === 0) || isLoading) return;
 
     setIsLoading(true);
     setError(null);
     if(isSidebarOpen) setIsSidebarOpen(false);
     
-    const userMessage: ChatMessage = { id: `user-${Date.now()}`, role: 'user', text: userPrompt, timestamp: new Date() };
+    const userMessage: ChatMessage = { id: `user-${Date.now()}`, role: 'user', text: userPrompt || `[${uploadedFiles.length} image(s) attached]`, timestamp: new Date() };
     const botMessage: ChatMessage = { id: `bot-${Date.now()}`, role: 'bot', text: 'Thinking...', isLoading: true, timestamp: new Date() };
     setMessages(prev => [...prev, userMessage, botMessage]);
     setNewMessage('');
@@ -211,7 +257,10 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
       
       const systemInstruction = `You are an expert AI web developer. Your task is to create or MODIFY a complete, single-page website using HTML, Tailwind CSS, and JavaScript.
 
-**If the user provides existing code, your task is to modify it based on their request. If not, you will create the website from scratch.**
+**CRITICAL RULES:**
+- **Modify or Create:** If the user provides existing code, modify it based on their request. Otherwise, create the website from scratch.
+- **Incorporate User Images:** If the user uploads images, use them in the design as they request.
+- **Use Copyright-Free Stock Images:** When the design requires images and the user has NOT provided them, you MUST use high-quality, relevant, copyright-free image URLs from services like Unsplash, Pexels, or Pixabay.
 
 You must always return a single JSON object containing three properties: 'html', 'css', and 'js'.
 
@@ -232,8 +281,11 @@ You must always return a single JSON object containing three properties: 'html',
 When modifying, ensure you return the COMPLETE, updated code for all three files, not just the changed parts.`;
 
       let fullPrompt;
+      const imageInstruction = uploadedFiles.length > 0 ? `The user has provided ${uploadedFiles.length} image(s) to use.` : '';
+
       if (generatedCode) {
           fullPrompt = `
+          ${imageInstruction}
           My request is: "${userPrompt}".
 
           Please modify the following existing website code based on my request.
@@ -256,13 +308,26 @@ When modifying, ensure you return the COMPLETE, updated code for all three files
           Remember to return the complete, updated code for all three files in the required JSON format.
           `;
       } else {
-          fullPrompt = `Generate a website for: "${userPrompt}"`;
+          fullPrompt = `${imageInstruction} Generate a website for: "${userPrompt}"`;
       }
+      
+      const parts = [
+        ...uploadedFiles.map(file => ({
+            inlineData: {
+                mimeType: file.type,
+                data: file.data,
+            },
+        })),
+        { text: fullPrompt },
+      ];
+      
+      setUploadedFiles([]);
 
+      // Fix: Aligned with Gemini API guidelines by passing systemInstruction as a direct string.
       const response = await ai.models.generateContent({
         model: model,
-        contents: { parts: [{ text: fullPrompt }] },
-        config: { systemInstruction: { parts: [{ text: systemInstruction }] }, responseMimeType: "application/json", responseSchema: schema },
+        contents: { parts },
+        config: { systemInstruction: systemInstruction, responseMimeType: "application/json", responseSchema: schema },
       });
 
       const jsonString = response.text.trim();
@@ -282,7 +347,7 @@ When modifying, ensure you return the COMPLETE, updated code for all three files
     } finally {
       setIsLoading(false);
     }
-  }, [newMessage, isLoading, generatedCode, isSidebarOpen]);
+  }, [newMessage, isLoading, generatedCode, isSidebarOpen, uploadedFiles]);
 
   const triggerDownload = (filename: string, content: string, mimeType: string) => {
     const blob = new Blob([content], { type: mimeType });
@@ -364,10 +429,13 @@ When modifying, ensure you return the COMPLETE, updated code for all three files
                 <span className="text-sm font-medium">Exit</span>
               </button>
               <div className="flex items-center gap-2">
-                <button onClick={handleSaveProject} title="Save Project" disabled={!generatedCode || saveState !== 'idle'} className="p-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed relative w-9 h-9 flex items-center justify-center transition-colors">
-                    {saveState === 'saving' && <Loader />}
-                    {saveState === 'saved' && <ClipboardCheckIcon className="h-5 w-5 text-green-400" />}
-                    {saveState === 'idle' && <SaveIcon className="h-5 w-5" />}
+                <button onClick={handleSaveProject} title="Save Project" disabled={!generatedCode || saveState !== 'idle'} className="p-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed relative w-9 h-9 flex items-center justify-center transition-colors overflow-hidden">
+                    <div className={`absolute transition-all duration-300 ease-in-out ${saveState === 'idle' ? 'opacity-100 scale-100' : 'opacity-0 scale-0'}`}>
+                        <SaveIcon className="h-5 w-5" />
+                    </div>
+                    <div className={`absolute transition-all duration-300 ease-in-out ${saveState === 'saved' ? 'opacity-100 scale-100' : 'opacity-0 scale-0'}`}>
+                        <ClipboardCheckIcon className="h-5 w-5 text-green-400" />
+                    </div>
                 </button>
                 <button onClick={() => setIsCodePanelVisible(!isCodePanelVisible)} title={isCodePanelVisible ? 'Hide Code' : 'View Code'} disabled={!generatedCode} className={`p-2 rounded-lg transition-colors ${isCodePanelVisible ? 'bg-sky-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50'}`}>
                   <CodeIcon className="h-5 w-5" />
@@ -395,19 +463,38 @@ When modifying, ensure you return the COMPLETE, updated code for all three files
 
           {/* Prompt Input */}
           <div className="flex-shrink-0 p-4 border-t border-slate-800">
+            {uploadedFiles.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-2 p-2 bg-slate-800/50 rounded-lg">
+                    {uploadedFiles.map((file, index) => (
+                        <div key={index} className="relative bg-slate-700 p-1 rounded-md flex items-center gap-2 text-xs">
+                            <img src={`data:${file.type};base64,${file.data}`} alt={file.name} className="h-8 w-8 object-cover rounded" />
+                            <span className="max-w-[100px] truncate text-slate-300" title={file.name}>{file.name}</span>
+                            <button onClick={() => handleRemoveFile(index)} className="absolute -top-1.5 -right-1.5 bg-slate-900 rounded-full p-0.5 text-slate-400 hover:bg-red-500 hover:text-white transition-colors">
+                                <XIcon className="h-3 w-3" />
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            )}
             <form onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }} className="relative">
+              <input type="file" ref={fileInputRef} onChange={handleFileChange} multiple accept="image/*" className="hidden" />
               <textarea
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } }}
-                placeholder="e.g., A sleek portfolio for a UX designer..."
-                className="w-full p-3 pr-12 bg-slate-800 border border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500 transition-colors text-slate-200 text-sm placeholder:text-slate-500 resize-none"
+                placeholder="Attach images and describe your vision..."
+                className="w-full p-3 pr-24 bg-slate-800 border border-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500 transition-colors text-slate-200 text-sm placeholder:text-slate-500 resize-none"
                 rows={3}
                 disabled={isLoading}
               />
-              <button type="submit" disabled={isLoading || !newMessage.trim()} className="absolute right-3 bottom-3 p-2 rounded-full bg-sky-600 text-white hover:bg-sky-500 disabled:bg-slate-600 disabled:cursor-not-allowed transition-all duration-300">
-                {isLoading ? <Loader /> : <SendIcon className="h-5 w-5" />}
-              </button>
+              <div className="absolute right-3 bottom-3 flex items-center gap-1">
+                <button type="button" onClick={() => fileInputRef.current?.click()} title="Attach files" className="p-2 rounded-full text-slate-400 hover:bg-slate-700 hover:text-white transition-colors">
+                    <PaperclipIcon className="h-5 w-5" />
+                </button>
+                <button type="submit" disabled={isLoading || (!newMessage.trim() && uploadedFiles.length === 0)} className="p-2 rounded-full bg-sky-600 text-white hover:bg-sky-500 disabled:bg-slate-600 disabled:cursor-not-allowed transition-all duration-300">
+                  {isLoading ? <Loader /> : <SendIcon className="h-5 w-5" />}
+                </button>
+              </div>
             </form>
           </div>
         </aside>
@@ -554,10 +641,17 @@ const GitHubModal: React.FC<{
             ];
 
             for (const file of filesToPush) {
+                // Fix: Replaced deprecated `unescape` with a modern equivalent to safely handle Unicode characters when Base64 encoding.
+                const encodedContent = btoa(
+                    Array.from(new TextEncoder().encode(file.content), (byte) =>
+                      String.fromCharCode(byte)
+                    ).join('')
+                );
+
                 const pushRes = await fetch(`https://api.github.com/repos/${auth.username}/${repoName}/contents/${file.path}`, {
                     method: 'PUT',
                     headers: { Authorization: `token ${auth.token}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message: 'Initial commit from CraftCore', content: btoa(unescape(encodeURIComponent(file.content))) }),
+                    body: JSON.stringify({ message: 'Initial commit from CraftCore', content: encodedContent }),
                 });
                 if (!pushRes.ok) throw new Error(`Failed to push ${file.path}. ${await pushRes.text()}`);
             }
