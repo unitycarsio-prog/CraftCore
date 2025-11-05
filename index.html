@@ -14,11 +14,12 @@
         height: 8px;
       }
       ::-webkit-scrollbar-track {
-        background: transparent; /* Make track transparent */
+        background: #0f172a; /* slate-900 */
       }
       ::-webkit-scrollbar-thumb {
         background: #475569; /* slate-600 */
         border-radius: 4px;
+        border: 2px solid #0f172a; /* slate-900 */
       }
       ::-webkit-scrollbar-thumb:hover {
         background: #64748b; /* slate-500 */
@@ -26,7 +27,63 @@
       /* For Firefox */
       * {
         scrollbar-width: thin;
-        scrollbar-color: #475569 transparent; /* thumb color, track color */
+        scrollbar-color: #475569 #0f172a; /* thumb color, track color */
+      }
+
+      /* Custom Animations */
+      @keyframes fadeInUp {
+        from {
+          opacity: 0;
+          transform: translateY(20px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @keyframes popIn {
+          from {
+              opacity: 0;
+              transform: scale(0.95);
+          }
+          to {
+              opacity: 1;
+              transform: scale(1);
+          }
+      }
+
+      @keyframes pulse-glow {
+        0%, 100% {
+          opacity: 0.2;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.35;
+          transform: scale(1.05);
+        }
+      }
+      
+      .animate-fadeInUp {
+        animation: fadeInUp 0.6s ease-out forwards;
+      }
+      .animate-popIn {
+        animation: popIn 0.3s ease-out forwards;
+      }
+      .animate-pulse-glow {
+        animation: pulse-glow 5s infinite ease-in-out;
+      }
+
+      /* Accessibility: Disable animations if requested */
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+          scroll-behavior: auto !important;
+        }
       }
     </style>
   <script type="importmap">

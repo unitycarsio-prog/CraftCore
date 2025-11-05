@@ -6,7 +6,7 @@ interface ProjectHistoryProps {
     onLoadProject: (page: Page, project: Project) => void;
 }
 
-const ProjectCard: React.FC<{ project: Project, onLoad: () => void }> = ({ project, onLoad }) => {
+const ProjectCard: React.FC<{ project: Project, onLoad: () => void, style?: React.CSSProperties }> = ({ project, onLoad, style }) => {
     const formattedDate = useMemo(() => {
         return new Date(project.timestamp).toLocaleDateString('en-US', {
             month: 'short',
@@ -16,7 +16,10 @@ const ProjectCard: React.FC<{ project: Project, onLoad: () => void }> = ({ proje
     }, [project.timestamp]);
 
     return (
-        <div className="bg-slate-800/50 rounded-xl border border-slate-700 overflow-hidden flex flex-col group transition-all duration-300 hover:border-sky-500 hover:scale-[1.02] hover:shadow-2xl hover:shadow-sky-500/10">
+        <div 
+          className="bg-slate-800/50 rounded-xl border border-slate-700 overflow-hidden flex flex-col group transition-all duration-300 hover:border-sky-500 hover:scale-105 hover:shadow-2xl hover:shadow-sky-500/20 animate-fadeInUp"
+          style={style}
+        >
             <div className="aspect-video bg-slate-900 overflow-hidden">
                 {project.screenshot ? (
                     <img src={project.screenshot} alt="Project preview" className="w-full h-full object-cover object-top transition-transform duration-500 group-hover:scale-105" />
@@ -35,7 +38,7 @@ const ProjectCard: React.FC<{ project: Project, onLoad: () => void }> = ({ proje
                     <span className="text-xs text-slate-400">{formattedDate}</span>
                     <button 
                         onClick={onLoad}
-                        className="px-3 py-1.5 text-xs font-semibold bg-sky-600 rounded-md hover:bg-sky-500 transition-colors"
+                        className="px-3 py-1.5 text-xs font-semibold bg-sky-600 rounded-md hover:bg-sky-500 transition-colors transform active:scale-95"
                     >
                         Load Project
                     </button>
@@ -68,7 +71,7 @@ const ProjectHistory: React.FC<ProjectHistoryProps> = ({ onLoadProject }) => {
 
     if (projects.length === 0) {
         return (
-            <div className="mt-20 sm:mt-28 text-center py-16">
+            <div className="mt-20 sm:mt-28 text-center py-16 animate-fadeInUp">
                  <div className="flex items-center justify-center mb-4">
                     <HistoryIcon className="h-10 w-10 text-slate-600"/>
                 </div>
@@ -82,7 +85,7 @@ const ProjectHistory: React.FC<ProjectHistoryProps> = ({ onLoadProject }) => {
 
     return (
         <div className="mt-20 sm:mt-28">
-            <div className="flex items-center justify-between mb-8">
+            <div className="flex items-center justify-between mb-8 animate-fadeInUp">
                 <h2 className="text-3xl font-bold text-white flex items-center gap-3">
                     <HistoryIcon className="h-8 w-8 text-sky-400"/>
                     Project History
@@ -99,8 +102,13 @@ const ProjectHistory: React.FC<ProjectHistoryProps> = ({ onLoadProject }) => {
                 )}
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
-                {projects.map(p => (
-                    <ProjectCard key={p.id} project={p} onLoad={() => onLoadProject(Page.BUILD, p)} />
+                {projects.map((p, index) => (
+                    <ProjectCard 
+                        key={p.id} 
+                        project={p} 
+                        onLoad={() => onLoadProject(Page.BUILD, p)} 
+                        style={{ animationDelay: `${index * 100}ms` }}
+                    />
                 ))}
             </div>
         </div>

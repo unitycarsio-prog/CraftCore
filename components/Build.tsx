@@ -1,6 +1,9 @@
 
 
 
+
+
+
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { GoogleGenAI, Type, Chat } from "@google/genai";
 import * as htmlToImage from 'html-to-image';
@@ -25,13 +28,13 @@ const Message: React.FC<{ message: ChatMessage; onRestore: (messageId: string) =
     const isBot = message.role === 'bot';
 
     return (
-        <div className={`flex items-start gap-3 ${isBot ? '' : 'justify-end'}`}>
+        <div className={`flex items-start gap-3 animate-popIn ${isBot ? '' : 'justify-end'}`}>
             {isBot && <div className="flex-shrink-0 h-8 w-8 rounded-full bg-slate-700 flex items-center justify-center"><BotIcon className="h-5 w-5 text-sky-400" /></div>}
             <div className={`w-auto max-w-xl p-3 rounded-xl ${isBot ? 'bg-slate-800 rounded-tl-none' : 'bg-sky-600 text-white rounded-br-none'}`}>
                 <p className="text-sm text-slate-200 whitespace-pre-wrap">{message.text}</p>
                 {message.isLoading && <div className="mt-2"><Loader/></div>}
                 {message.code && !message.isLoading && (
-                    <button onClick={() => onRestore(message.id)} className="mt-2 flex items-center gap-1 text-xs px-2 py-1 bg-sky-600/50 hover:bg-sky-600 rounded transition-colors">
+                    <button onClick={() => onRestore(message.id)} className="mt-2 flex items-center gap-1 text-xs px-2 py-1 bg-sky-600/50 hover:bg-sky-600 rounded transition-colors transform active:scale-95">
                         <RestoreIcon className="h-3 w-3" /> Restore this version
                     </button>
                 )}
@@ -75,9 +78,9 @@ const buildPreviewHtml = (code: GeneratedCode | null): string => {
     return finalHtml;
 }
 
-const processPixabayPlaceholders = async (html: string): Promise<string> => {
-    const PIXABAY_API_KEY = '51133158-18fb33fc945bd1819e06acba2';
-    const placeholderRegex = /src="pixabay:\/\/([^"]+)"/g;
+const processPexelsPlaceholders = async (html: string): Promise<string> => {
+    const PEXELS_API_KEY = 'Jndg9gFchoN1hhljZIj3cNDmMPbemKFOQn0C6xYfhEHLCq93bUgFpBAf';
+    const placeholderRegex = /src="pexels:\/\/(photo|video)\/([^"]+)"/g;
     const matches = [...html.matchAll(placeholderRegex)];
 
     if (matches.length === 0) {
@@ -85,44 +88,110 @@ const processPixabayPlaceholders = async (html: string): Promise<string> => {
     }
 
     const replacements = await Promise.all(matches.map(async (match, index) => {
-        const originalSrc = match[0];
-        const fullQuery = match[1];
+        const originalSrc = match[0]; // e.g., src="pexels://photo/query"
+        const type = match[1]; // "photo" or "video"
+        const query = match[2].replace(/_/g, ' ');
 
-        let category = '';
-        let query = '';
+        try {
+            let apiUrl = '';
+            if (type === 'photo') {
+                apiUrl = `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&per_page=20`;
+            } else { // video
+                apiUrl = `https://api.pexels.com/v1/videos/search?query=${encodeURIComponent(query)}&per_page=15`;
+            }
 
-        // New format is "category/keywords", fallback for "keywords"
-        if (fullQuery.includes('/')) {
-            const parts = fullQuery.split('/');
-            category = parts[0];
-            query = parts.slice(1).join('_').replace(/_/g, ' '); 
-        } else {
-            query = fullQuery.replace(/_/g, ' ');
+            const response = await fetch(apiUrl, {
+                headers: { Authorization: PEXELS_API_KEY }
+            });
+
+            if (!response.ok) {
+                throw new Error(`Pexels API error: ${response.statusText}`);
+            }
+
+            const data = await response.json();
+            
+            if (type === 'photo' && data.photos && data.photos.length > 0) {
+                const image = data.photos[index % data.photos.length];
+                return { original: originalSrc, newSrc: `src="${image.src.large2x}"` };
+            } else if (type === 'video' && data.videos && data.videos.length > 0) {
+                const video = data.videos[index % data.videos.length];
+                const mp4File = video.video_files.find((f: any) => f.file_type === 'video/mp4' && (f.quality === 'hd' || f.quality === 'sd')) || video.video_files[0];
+                if (mp4File) {
+                    return { original: originalSrc, newSrc: `src="${mp4File.link}"` };
+                }
+            }
+        } catch (error) {
+            console.error(`Failed to fetch from Pexels for query: ${query}`, error);
         }
         
+        // Fallback
+        const fallbackSrc = type === 'photo' 
+            ? `https://source.unsplash.com/1600x900/?${query}` 
+            : ''; 
+        
+        return { original: originalSrc, newSrc: `src="${fallbackSrc}"` };
+    }));
+
+    let processedHtml = html;
+    for (const replacement of replacements) {
+        if (replacement) {
+            processedHtml = processedHtml.replace(replacement.original, replacement.newSrc);
+        }
+    }
+
+    return processedHtml;
+};
+
+const processPixabayPlaceholders = async (html: string): Promise<string> => {
+    const PIXABAY_API_KEY = '51133158-18fb33fc945bd1819e06acba2';
+    const placeholderRegex = /src="pixabay:\/\/(photo|video)\/([^"]+)"/g;
+    const matches = [...html.matchAll(placeholderRegex)];
+
+    if (matches.length === 0) {
+        return html;
+    }
+
+    const replacements = await Promise.all(matches.map(async (match, index) => {
+        const originalSrc = match[0]; // e.g., src="pixabay://photo/query"
+        const type = match[1]; // "photo" or "video"
+        const query = match[2].replace(/_/g, ' ');
+
         try {
-            let apiUrl = `https://pixabay.com/api/?key=${PIXABAY_API_KEY}&q=${encodeURIComponent(query)}&image_type=photo&per_page=20&safesearch=true`;
-            if (category) {
-                apiUrl += `&category=${encodeURIComponent(category)}`;
+            let apiUrl = '';
+            if (type === 'photo') {
+                apiUrl = `https://pixabay.com/api/?key=${PIXABAY_API_KEY}&q=${encodeURIComponent(query)}&image_type=photo&per_page=20`;
+            } else { // video
+                apiUrl = `https://pixabay.com/api/videos/?key=${PIXABAY_API_KEY}&q=${encodeURIComponent(query)}&per_page=15`;
             }
+
             const response = await fetch(apiUrl);
 
             if (!response.ok) {
                 throw new Error(`Pixabay API error: ${response.statusText}`);
             }
+
             const data = await response.json();
-            // Use a different image for each placeholder to avoid repetition
-            if (data.hits && data.hits.length > 0) {
+            
+            if (type === 'photo' && data.hits && data.hits.length > 0) {
                 const image = data.hits[index % data.hits.length];
-                if (image && image.webformatURL) {
-                    return { original: originalSrc, newSrc: `src="${image.webformatURL}"` };
+                return { original: originalSrc, newSrc: `src="${image.largeImageURL}"` };
+            } else if (type === 'video' && data.hits && data.hits.length > 0) {
+                const video = data.hits[index % data.hits.length];
+                const mp4File = video.videos.medium; // Pixabay provides different sizes
+                if (mp4File) {
+                    return { original: originalSrc, newSrc: `src="${mp4File.url}"` };
                 }
             }
         } catch (error) {
-            console.error(`Failed to fetch image from Pixabay for query: ${fullQuery}`, error);
+            console.error(`Failed to fetch from Pixabay for query: ${query}`, error);
         }
-        // Fallback to a generic placeholder if API fails or no image is found
-        return { original: originalSrc, newSrc: `src="https://source.unsplash.com/1600x900/?${query}"` }; 
+        
+        // Fallback
+        const fallbackSrc = type === 'photo' 
+            ? `https://source.unsplash.com/1600x900/?${query}` 
+            : ''; 
+        
+        return { original: originalSrc, newSrc: `src="${fallbackSrc}"` };
     }));
 
     let processedHtml = html;
@@ -185,6 +254,8 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false);
   const [chat, setChat] = useState<Chat | null>(null);
+  // FIX: Add state to track the current model used in the chat session to avoid accessing private properties.
+  const [chatModel, setChatModel] = useState<string | null>(null);
 
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -214,17 +285,22 @@ const Build: React.FC<BuildProps> = ({ onNavigate, initialProject }) => {
         *   **Other Files (documents, etc.):** Create a download link using an \`<a>\` tag with the \`download\` attribute set to the original filename. Example: \`<a href="user-file://3" download="annual_report.docx">Download Annual Report</a>\`
     *   Integrate the user's files thoughtfully into the design as requested. **Do NOT attempt to use Base64 data yourself.**
 
-2.  **PRIORITY #2: PIXABAY FOR TOPIC-SPECIFIC IMAGES:**
-    *   If the user's request requires images and they haven't provided enough, you **MUST** use Pixabay image placeholders for high-quality, relevant images. This rule **only applies to images**, not other file types. My system will automatically convert these into real images.
-    *   To do this, set the \`src\` attribute of an \`<img>\` tag to this specific format: \`src="pixabay://<CATEGORY>/<KEYWORDS>"\`.
-    *   \`<CATEGORY>\`: You **MUST** choose the most relevant category from this list to ensure image relevance: \`backgrounds, fashion, nature, science, education, feelings, health, people, religion, places, animals, industry, computer, food, sports, transportation, travel, buildings, business, music\`.
-    *   \`<KEYWORDS>\`: Replace with specific, URL-friendly search terms using underscores for spaces (e.g., \`modern_architecture\` or \`snowy_mountains\`).
-    *   **CRITICAL:** Using a relevant category is mandatory for getting topic-specific images.
+2.  **PRIORITY #2: STOCK MEDIA FROM PEXELS & PIXABAY:**
+    *   If the user's request requires images or videos and they haven't provided files, you **MUST** use placeholders from Pexels or Pixabay for high-quality, relevant media. My system automatically converts these into real assets. Use a mix of both for variety.
+    *   **Pexels Format:**
+        *   **Images:** \`<img src="pexels://photo/<KEYWORDS>" alt="...">\`
+        *   **Videos:** \`<video src="pexels://video/<KEYWORDS>" controls autoplay loop muted></video>\`
+    *   **Pixabay Format:**
+        *   **Images:** \`<img src="pixabay://photo/<KEYWORDS>" alt="...">\`
+        *   **Videos:** \`<video src="pixabay://video/<KEYWORDS>" controls autoplay loop muted></video>\`
+    *   **Usage:**
+        *   Example: \`<img src="pexels://photo/modern_architecture">\`, \`<img src="pixabay://photo/business_meeting">\`
+        *   \`<KEYWORDS>\`: Replace with specific, URL-friendly search terms using underscores for spaces (e.g., \`snowy_mountains\`).
 
-3.  **NO GENERIC PLACEHOLDERS:** Under no circumstances should you use empty \`src=""\`, \`src="#"\`, or generic placeholders like \`https://placehold.co/...\`. Every single \`<img>\` tag must have a valid working source, either from a \`user-file://\` placeholder (if it's an image) or a \`pixabay://\` placeholder. All other media elements (\`<video>\`, \`<iframe>\`) and links (\`<a>\`) for user files must also use the \`user-file://\` placeholder.
+3.  **NO GENERIC PLACEHOLDERS:** Under no circumstances should you use empty \`src=""\`, \`src="#"\`, or generic placeholders like \`https://placehold.co/...\`. Every single media element must have a valid working source: a \`user-file://\` placeholder, a \`pexels://\` placeholder, or a \`pixabay://\` placeholder.
 
 **USER REQUEST HANDLING:**
-- If asked to clone a website (e.g., "carwale.com"), create a **new, inspired design**. Populate it with relevant Pixabay placeholders and example text. Do not copy copyrighted assets.
+- If asked to clone a website (e.g., "carwale.com"), create a **new, inspired design**. Populate it with relevant Pexels placeholders and example text. Do not copy copyrighted assets.
 
 **TECHNICAL OUTPUT REQUIREMENTS:**
 You must always return a single, valid JSON object with three properties: 'html', 'css', and 'js'.
@@ -244,7 +320,7 @@ You must always return a single, valid JSON object with three properties: 'html'
 **FINAL CHECK:**
 1.  If this was a modification request, did I correctly apply the changes to the provided code?
 2.  Have I prioritized and used all user-provided files via \`user-file://\` placeholders?
-3.  Have I supplemented with \`pixabay://\` placeholders for images if needed?
+3.  Have I supplemented with \`pexels://\` or \`pixabay://\` placeholders for photos and videos if needed, using the correct tag (\`<img>\` or \`<video>\`) for each?
 4.  Is my response a single, valid JSON object with 'html', 'css', and 'js' keys containing the full code?`;
 
   useEffect(() => {
@@ -277,6 +353,8 @@ You must always return a single, valid JSON object with three properties: 'html'
             history,
         });
         setChat(newChat);
+        // FIX: Track the model name of the created chat session.
+        setChatModel('gemini-2.5-flash');
     }
   }, [initialProject, systemInstruction]);
 
@@ -454,11 +532,15 @@ You must always return a single, valid JSON object with three properties: 'html'
         }
         const fullPrompt = `${fileInstruction}${userPrompt}`;
 
+        // FIX: Replaced direct access to private 'model' property with a check against the 'chatModel' state.
+        // Also fixed a bug where chat history was lost when switching models by ensuring history is passed when creating a new chat session.
         const sendRequest = async (modelName: 'gemini-2.5-flash' | 'gemini-2.5-pro', existingChat: Chat | null, history?: any[]) => {
             let session = existingChat;
-            if (!session || !session.model.includes(modelName)) {
-                session = ai.chats.create({ model: modelName, config, history });
+            if (!session || chatModel !== modelName) {
+                const chatHistory = history || buildHistoryFromMessages(messages.slice(0, -2));
+                session = ai.chats.create({ model: modelName, config, history: chatHistory });
                 setChat(session);
+                setChatModel(modelName);
             }
             return await session.sendMessage({ message: fullPrompt });
         };
@@ -485,6 +567,7 @@ You must always return a single, valid JSON object with three properties: 'html'
         if (rawCode.html) {
             let finalHtml = rawCode.html;
             finalHtml = await processUserFilePlaceholders(finalHtml, filesForThisRequest);
+            finalHtml = await processPexelsPlaceholders(finalHtml);
             finalHtml = await processPixabayPlaceholders(finalHtml);
             
             const finalCode = { ...rawCode, html: finalHtml };
@@ -502,7 +585,7 @@ You must always return a single, valid JSON object with three properties: 'html'
     } finally {
         setIsLoading(false);
     }
-  }, [newMessage, isLoading, isSidebarOpen, uploadedFiles, chat, messages, systemInstruction]);
+  }, [newMessage, isLoading, isSidebarOpen, uploadedFiles, chat, messages, systemInstruction, chatModel]);
 
   const triggerDownload = (filename: string, content: string, mimeType: string) => {
     const blob = new Blob([content], { type: mimeType });
@@ -569,6 +652,8 @@ You must always return a single, valid JSON object with three properties: 'html'
         history: historyForChat
     });
     setChat(newChat);
+    // FIX: Update the chatModel state when restoring history to a new chat session.
+    setChatModel('gemini-2.5-flash');
 
     const restoreNotification: ChatMessage = {
         id: `restore-${Date.now()}`,
@@ -632,7 +717,8 @@ You must always return a single, valid JSON object with three properties: 'html'
       {isSidebarOpen && (
         <div 
             onClick={() => setIsSidebarOpen(false)}
-            className="lg:hidden fixed inset-0 bg-black/60 z-20"
+            className="lg:hidden fixed inset-0 bg-black/60 z-20 animate-fadeInUp"
+            style={{animationDuration: '0.3s'}}
             aria-hidden="true"
         ></div>
       )}
@@ -643,9 +729,9 @@ You must always return a single, valid JSON object with three properties: 'html'
           onDragLeave={handleDragLeave}
           onDragOver={handleDragOver}
           onDrop={handleDrop}
-          className={`absolute lg:relative z-30 w-[90%] sm:w-[380px] flex-shrink-0 bg-slate-950 flex flex-col h-full border-r border-slate-800 transition-transform duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0`}>
+          className={`absolute lg:relative z-30 w-[90%] sm:w-[380px] flex-shrink-0 bg-slate-950 flex flex-col h-full border-r border-slate-800 transition-transform duration-500 ease-in-out ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0`}>
           {isDraggingOver && (
-            <div className="absolute inset-0 bg-sky-900/80 backdrop-blur-sm z-40 flex items-center justify-center m-2 border-2 border-dashed border-sky-400 rounded-lg">
+            <div className="absolute inset-0 bg-sky-900/80 backdrop-blur-sm z-40 flex items-center justify-center m-2 border-2 border-dashed border-sky-400 rounded-lg animate-popIn">
                 <div className="text-center">
                     <UploadIcon className="h-12 w-12 mx-auto text-sky-300" />
                     <p className="mt-2 font-semibold text-white">Drop your files here</p>
@@ -655,12 +741,12 @@ You must always return a single, valid JSON object with three properties: 'html'
           {/* Sidebar Header */}
           <header className="flex-shrink-0 p-4 border-b border-slate-800">
             <div className="flex items-center justify-between">
-              <button onClick={() => onNavigate(Page.HOME)} className="flex items-center gap-2 p-2 -ml-2 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors" aria-label="Back to Home">
+              <button onClick={() => onNavigate(Page.HOME)} className="flex items-center gap-2 p-2 -ml-2 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition-colors transform active:scale-95" aria-label="Back to Home">
                 <ArrowLeftIcon className="h-5 w-5" />
                 <span className="text-sm font-medium">Exit</span>
               </button>
               <div className="flex items-center gap-2">
-                <button onClick={handleSaveProject} title="Save Project" disabled={!generatedCode || saveState !== 'idle'} className="p-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed relative w-9 h-9 flex items-center justify-center transition-colors overflow-hidden">
+                <button onClick={handleSaveProject} title="Save Project" disabled={!generatedCode || saveState !== 'idle'} className="p-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed relative w-9 h-9 flex items-center justify-center transition-all transform active:scale-95 overflow-hidden">
                     <div className={`absolute transition-all duration-300 ease-in-out ${saveState === 'idle' ? 'opacity-100 scale-100' : 'opacity-0 scale-0'}`}>
                         <SaveIcon className="h-5 w-5" />
                     </div>
@@ -668,16 +754,16 @@ You must always return a single, valid JSON object with three properties: 'html'
                         <ClipboardCheckIcon className="h-5 w-5 text-green-400" />
                     </div>
                 </button>
-                <button onClick={() => setIsCodePanelVisible(!isCodePanelVisible)} title={isCodePanelVisible ? 'Hide Code' : 'View Code'} disabled={!generatedCode} className={`p-2 rounded-lg transition-colors ${isCodePanelVisible ? 'bg-sky-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50'}`}>
+                <button onClick={() => setIsCodePanelVisible(!isCodePanelVisible)} title={isCodePanelVisible ? 'Hide Code' : 'View Code'} disabled={!generatedCode} className={`p-2 rounded-lg transition-colors transform active:scale-95 ${isCodePanelVisible ? 'bg-sky-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50'}`}>
                   <CodeIcon className="h-5 w-5" />
                 </button>
-                <button onClick={() => setIsGithubModalOpen(true)} title="Push to GitHub" disabled={!generatedCode} className={`p-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50`}>
+                <button onClick={() => setIsGithubModalOpen(true)} title="Push to GitHub" disabled={!generatedCode} className={`p-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50 transform active:scale-95`}>
                     <GitHubIcon className={`h-5 w-5 ${githubAuth.status === 'authenticated' ? 'text-green-400' : ''}`} />
                 </button>
-                <button onClick={handleDownload} title="Download Project Files" disabled={!generatedCode} className="p-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50">
+                <button onClick={handleDownload} title="Download Project Files" disabled={!generatedCode} className="p-2 rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white disabled:opacity-50 transform active:scale-95">
                   <FileArchiveIcon className="h-5 w-5" />
                 </button>
-                <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden p-2 -mr-2 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white" aria-label="Close controls">
+                <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden p-2 -mr-2 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transform active:scale-95" aria-label="Close controls">
                     <XIcon className="h-5 w-5" />
                 </button>
               </div>
@@ -695,22 +781,24 @@ You must always return a single, valid JSON object with three properties: 'html'
           {/* Prompt Input */}
           <div className="flex-shrink-0 p-4 border-t border-slate-800">
             {uploadedFiles.length > 0 && (
-                <div className="mb-2 flex flex-wrap gap-2 p-2 bg-slate-800/50 rounded-lg">
-                    {uploadedFiles.map((file, index) => (
-                        <div key={index} className="relative bg-slate-700 p-1 rounded-md flex items-center gap-2 text-xs">
-                           {file.type.startsWith('image/') ? (
-                                <img src={`data:${file.type};base64,${file.data}`} alt={file.name} className="h-8 w-8 object-cover rounded" />
-                            ) : (
-                                <div className="h-8 w-8 flex items-center justify-center bg-slate-800 rounded">
-                                    <FilePreviewIcon fileType={file.type} />
-                                </div>
-                            )}
-                            <span className="max-w-[100px] truncate text-slate-300" title={file.name}>{file.name}</span>
-                            <button onClick={() => handleRemoveFile(index)} className="absolute -top-1.5 -right-1.5 bg-slate-900 rounded-full p-0.5 text-slate-400 hover:bg-red-500 hover:text-white transition-colors">
-                                <XIcon className="h-3 w-3" />
-                            </button>
-                        </div>
-                    ))}
+                <div className="mb-2 p-2 bg-slate-800/50 rounded-lg animate-popIn">
+                    <div className="flex flex-wrap gap-2">
+                        {uploadedFiles.map((file, index) => (
+                            <div key={index} className="relative bg-slate-700 p-1 rounded-md flex items-center gap-2 text-xs">
+                               {file.type.startsWith('image/') ? (
+                                    <img src={`data:${file.type};base64,${file.data}`} alt={file.name} className="h-8 w-8 object-cover rounded" />
+                                ) : (
+                                    <div className="h-8 w-8 flex items-center justify-center bg-slate-800 rounded">
+                                        <FilePreviewIcon fileType={file.type} />
+                                    </div>
+                                )}
+                                <span className="max-w-[100px] truncate text-slate-300" title={file.name}>{file.name}</span>
+                                <button onClick={() => handleRemoveFile(index)} className="absolute -top-1.5 -right-1.5 bg-slate-900 rounded-full p-0.5 text-slate-400 hover:bg-red-500 hover:text-white transition-colors transform hover:scale-110 active:scale-100">
+                                    <XIcon className="h-3 w-3" />
+                                </button>
+                            </div>
+                        ))}
+                    </div>
                 </div>
             )}
             <form onSubmit={(e) => { e.preventDefault(); handleSendMessage(); }} className="relative">
@@ -725,10 +813,10 @@ You must always return a single, valid JSON object with three properties: 'html'
                 disabled={isLoading}
               />
               <div className="absolute right-3 bottom-3 flex items-center gap-1">
-                <button type="button" onClick={() => fileInputRef.current?.click()} title="Attach files" className="p-2 rounded-full text-slate-400 hover:bg-slate-700 hover:text-white transition-colors">
+                <button type="button" onClick={() => fileInputRef.current?.click()} title="Attach files" className="p-2 rounded-full text-slate-400 hover:bg-slate-700 hover:text-white transition-colors transform active:scale-95">
                     <PaperclipIcon className="h-5 w-5" />
                 </button>
-                <button type="submit" disabled={isLoading || (!newMessage.trim() && uploadedFiles.length === 0)} className="p-2 rounded-full bg-sky-600 text-white hover:bg-sky-500 disabled:bg-slate-600 disabled:cursor-not-allowed transition-all duration-300">
+                <button type="submit" disabled={isLoading || (!newMessage.trim() && uploadedFiles.length === 0)} className="p-2 rounded-full bg-sky-600 text-white hover:bg-sky-500 disabled:bg-slate-600 disabled:cursor-not-allowed transition-all duration-300 transform active:scale-95">
                   {isLoading ? <Loader /> : <SendIcon className="h-5 w-5" />}
                 </button>
               </div>
@@ -742,18 +830,18 @@ You must always return a single, valid JSON object with three properties: 'html'
           <header className="flex-shrink-0 h-14 flex items-center justify-center gap-2 bg-slate-900 border-b border-slate-800 z-10 relative">
             <button 
                 onClick={() => setIsSidebarOpen(true)}
-                className="lg:hidden absolute left-4 top-1/2 -translate-y-1/2 p-2 rounded-md text-slate-400 hover:bg-slate-800"
+                className="lg:hidden absolute left-4 top-1/2 -translate-y-1/2 p-2 rounded-md text-slate-400 hover:bg-slate-800 transform active:scale-95"
                 aria-label="Open controls"
             >
                 <MenuIcon className="h-5 w-5" />
             </button>
-            <button onClick={() => setPreviewMode('desktop')} className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-colors ${previewMode === 'desktop' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Desktop Preview"><DesktopIcon className="h-5 w-5" /> <span className="hidden sm:inline">Desktop</span></button>
-            <button onClick={() => setPreviewMode('tablet')} className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-colors ${previewMode === 'tablet' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Tablet Preview"><TabletIcon className="h-5 w-5" /> <span className="hidden sm:inline">Tablet</span></button>
-            <button onClick={() => setPreviewMode('mobile')} className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-colors ${previewMode === 'mobile' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Mobile Preview"><MobileIcon className="h-5 w-5" /> <span className="hidden sm:inline">Mobile</span></button>
+            <button onClick={() => setPreviewMode('desktop')} className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-all transform active:scale-95 ${previewMode === 'desktop' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Desktop Preview"><DesktopIcon className="h-5 w-5" /> <span className="hidden sm:inline">Desktop</span></button>
+            <button onClick={() => setPreviewMode('tablet')} className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-all transform active:scale-95 ${previewMode === 'tablet' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Tablet Preview"><TabletIcon className="h-5 w-5" /> <span className="hidden sm:inline">Tablet</span></button>
+            <button onClick={() => setPreviewMode('mobile')} className={`px-4 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-all transform active:scale-95 ${previewMode === 'mobile' ? 'bg-sky-600 text-white' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`} title="Mobile Preview"><MobileIcon className="h-5 w-5" /> <span className="hidden sm:inline">Mobile</span></button>
             <div className="h-6 w-px bg-slate-700 mx-2"></div>
             <button 
               onClick={toggleFullscreen} 
-              className="px-3 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-colors text-slate-400 hover:bg-slate-800 hover:text-white"
+              className="px-3 py-2 rounded-md text-sm font-medium flex items-center gap-2 transition-colors text-slate-400 hover:bg-slate-800 hover:text-white transform active:scale-95"
               title={isFullscreen ? 'Exit Fullscreen Preview' : 'Fullscreen Preview'}
             >
               {isFullscreen ? <CompressIcon className="h-5 w-5" /> : <ExpandIcon className="h-5 w-5" />}
@@ -763,7 +851,7 @@ You must always return a single, valid JSON object with three properties: 'html'
           {/* Preview */}
           <main className="flex-grow overflow-auto p-4 sm:p-8 flex items-center justify-center bg-slate-900">
             {isLoading && (
-              <div className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm flex flex-col items-center justify-center z-20 transition-opacity duration-300">
+              <div className="absolute inset-0 bg-slate-950/50 backdrop-blur-sm flex flex-col items-center justify-center z-20 transition-opacity duration-300 animate-fadeInUp" style={{animationDuration: '0.3s'}}>
                 <Loader />
                 <p className="mt-4 text-slate-300 font-medium">CraftCore is building your vision...</p>
                 <p className="mt-2 text-sm text-slate-400">This may take a few moments.</p>
@@ -775,19 +863,19 @@ You must always return a single, valid JSON object with three properties: 'html'
           </main>
           
           {/* Code Panel (Overlay) */}
-          <aside className={`transition-transform duration-300 ease-in-out bg-slate-900/80 backdrop-blur-xl border-l border-slate-700 flex flex-col absolute top-0 right-0 h-full z-30 ${isCodePanelVisible ? 'translate-x-0 w-full md:w-[50%] lg:w-[40%]' : 'translate-x-full w-full md:w-[50%] lg:w-[40%]'}`}>
+          <aside className={`transition-transform duration-500 ease-in-out bg-slate-900/80 backdrop-blur-xl border-l border-slate-700 flex flex-col absolute top-0 right-0 h-full z-30 ${isCodePanelVisible ? 'translate-x-0 w-full md:w-[50%] lg:w-[40%]' : 'translate-x-full w-full md:w-[50%] lg:w-[40%]'}`}>
             <header className="flex items-center justify-between p-4 border-b border-slate-700 flex-shrink-0">
               <div className="flex items-center gap-2">
-                <button onClick={() => setActiveCodeTab('html')} className={`px-3 py-1 text-sm rounded-md ${activeCodeTab === 'html' ? 'bg-sky-600' : 'bg-slate-700 hover:bg-slate-600'}`}>HTML</button>
-                <button onClick={() => setActiveCodeTab('css')} className={`px-3 py-1 text-sm rounded-md ${activeCodeTab === 'css' ? 'bg-sky-600' : 'bg-slate-700 hover:bg-slate-600'}`} disabled={!generatedCode?.css}>CSS</button>
-                <button onClick={() => setActiveCodeTab('js')} className={`px-3 py-1 text-sm rounded-md ${activeCodeTab === 'js' ? 'bg-sky-600' : 'bg-slate-700 hover:bg-slate-600'}`} disabled={!generatedCode?.js}>JS</button>
+                <button onClick={() => setActiveCodeTab('html')} className={`px-3 py-1 text-sm rounded-md transition-colors transform active:scale-95 ${activeCodeTab === 'html' ? 'bg-sky-600' : 'bg-slate-700 hover:bg-slate-600'}`}>HTML</button>
+                <button onClick={() => setActiveCodeTab('css')} className={`px-3 py-1 text-sm rounded-md transition-colors transform active:scale-95 ${activeCodeTab === 'css' ? 'bg-sky-600' : 'bg-slate-700 hover:bg-slate-600'}`} disabled={!generatedCode?.css}>CSS</button>
+                <button onClick={() => setActiveCodeTab('js')} className={`px-3 py-1 text-sm rounded-md transition-colors transform active:scale-95 ${activeCodeTab === 'js' ? 'bg-sky-600' : 'bg-slate-700 hover:bg-slate-600'}`} disabled={!generatedCode?.js}>JS</button>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={handleCopyCode} className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-md bg-slate-700 hover:bg-slate-600 transition-colors disabled:opacity-50">
+                <button onClick={handleCopyCode} className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-md bg-slate-700 hover:bg-slate-600 transition-colors disabled:opacity-50 transform active:scale-95">
                   {copied ? <ClipboardCheckIcon className="h-4 w-4 text-green-400"/> : <ClipboardIcon className="h-4 w-4"/>}
                   {copied ? 'Copied!' : 'Copy'}
                 </button>
-                <button onClick={() => setIsCodePanelVisible(false)} className="p-1.5 rounded-md bg-slate-700 hover:bg-slate-600">
+                <button onClick={() => setIsCodePanelVisible(false)} className="p-1.5 rounded-md bg-slate-700 hover:bg-slate-600 transition-transform active:scale-95">
                     <XIcon className="h-4 w-4" />
                 </button>
               </div>
@@ -923,8 +1011,8 @@ const GitHubModal: React.FC<{
                 <a href="https://github.com/settings/tokens/new?scopes=repo&description=CraftCore" target="_blank" rel="noopener noreferrer" className="text-sky-400 hover:underline ml-1">Generate a token</a>
             </p>
             <div className="flex justify-end gap-3 pt-2">
-                 <button type="button" onClick={onClose} className="px-4 py-2 text-sm rounded-md hover:bg-slate-700">Cancel</button>
-                 <button type="submit" disabled={status==='loading' || !tokenInput} className="px-4 py-2 text-sm bg-sky-600 font-semibold rounded-md hover:bg-sky-500 disabled:bg-slate-600 flex items-center gap-2">
+                 <button type="button" onClick={onClose} className="px-4 py-2 text-sm rounded-md hover:bg-slate-700 transition-colors transform active:scale-95">Cancel</button>
+                 <button type="submit" disabled={status==='loading' || !tokenInput} className="px-4 py-2 text-sm bg-sky-600 font-semibold rounded-md hover:bg-sky-500 disabled:bg-slate-600 flex items-center gap-2 transition-colors transform active:scale-95">
                     {status==='loading' ? <Loader/> : <ZapIcon className="h-4 w-4"/>}
                     Authenticate
                 </button>
@@ -952,8 +1040,8 @@ const GitHubModal: React.FC<{
             </div>
              <p className="text-xs text-slate-500">A new {isPrivate ? 'private' : 'public'} repository will be created and your files (`index.html`, `style.css`, `script.js`) will be pushed.</p>
             <div className="flex justify-end gap-3 pt-2">
-                 <button type="button" onClick={onClose} className="px-4 py-2 text-sm rounded-md hover:bg-slate-700">Cancel</button>
-                 <button type="submit" disabled={status === 'loading' || !repoName} className="px-4 py-2 text-sm bg-sky-600 font-semibold rounded-md hover:bg-sky-500 disabled:bg-slate-600 flex items-center gap-2">
+                 <button type="button" onClick={onClose} className="px-4 py-2 text-sm rounded-md hover:bg-slate-700 transition-colors transform active:scale-95">Cancel</button>
+                 <button type="submit" disabled={status === 'loading' || !repoName} className="px-4 py-2 text-sm bg-sky-600 font-semibold rounded-md hover:bg-sky-500 disabled:bg-slate-600 flex items-center gap-2 transition-colors transform active:scale-95">
                     {status === 'loading' && <Loader/>}
                     {status === 'loading' ? 'Working...' : 'Create & Push'}
                 </button>
@@ -962,11 +1050,11 @@ const GitHubModal: React.FC<{
     );
 
     return (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
-            <div className="bg-slate-800 border border-slate-700 rounded-lg shadow-2xl w-full max-w-md" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeInUp" style={{animationDuration: '0.3s'}} onClick={onClose}>
+            <div className="bg-slate-800 border border-slate-700 rounded-lg shadow-2xl w-full max-w-md animate-popIn" style={{animationDuration: '0.3s'}} onClick={e => e.stopPropagation()}>
                 <header className="flex items-center justify-between p-4 border-b border-slate-700">
                     <h2 className="text-lg font-semibold flex items-center gap-2"><GitHubIcon/> Push to a new repository</h2>
-                    <button onClick={onClose} className="p-1 rounded-full hover:bg-slate-700"><XIcon className="w-5 h-5"/></button>
+                    <button onClick={onClose} className="p-1 rounded-full hover:bg-slate-700 transition-colors transform active:scale-95"><XIcon className="w-5 h-5"/></button>
                 </header>
                 {view === 'auth' ? AuthView : PushView}
                 {message && (
